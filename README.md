@@ -57,10 +57,11 @@ The included `Dockerfile` builds the web app and packages it with the API in one
 
 Railway's Free plan currently includes 0.5 GB of volume storage, 0.5 GB of RAM and $1 of monthly usage credit. That is enough for a small survey deployment, but attachments and large response sets can exceed the storage limit. If Railway cannot verify the account or the credit is exhausted, use an always-free VM such as Oracle Cloud Always Free and run the same Docker image with a persistent volume.
 
-Back up the database from the Railway CLI with:
+Back up the database with the Railway CLI. Run `railway login` and `railway link` once, then create the verified backup inside the running service and download it:
 
 ```powershell
-railway run python -m backend.server --db /data/agal.sqlite --backup /data/agal-backup.sqlite
+railway ssh -- python -m backend.server --db /data/agal.sqlite --backup /data/agal-backup.sqlite
+railway volume files download /agal-backup.sqlite ./agal-backup.sqlite
 ```
 
 ### Your first survey
