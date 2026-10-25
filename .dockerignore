@@ -1,0 +1,12 @@
+.git
+.gitignore
+data
+mobile
+docs
+web/node_modules
+web/dist
+web/test-results
+web/playwright-report
+__pycache__
+*.pyc
+.venv

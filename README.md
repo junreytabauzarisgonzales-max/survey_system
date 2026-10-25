@@ -47,6 +47,22 @@ Open **http://127.0.0.1:8000**. The server serves both the built web app and `/a
 
 For web development, run the API on port 8000 and run `npm run dev` in `web/`. Vite proxies API requests to the backend.
 
+### Deploy on Railway (free plan)
+
+The included `Dockerfile` builds the web app and packages it with the API in one service. `railway.json` selects that Dockerfile and checks `/api/health`.
+
+1. In Railway, create a project from this GitHub repository. Railway detects `railway.json` and builds the Docker image.
+2. Add a volume to the service and mount it at **`/data`**. The server stores `/data/agal.sqlite` there, so surveys survive redeploys and restarts.
+3. Generate a public domain under **Settings → Networking**. Open it and create an account through the normal sign-up form.
+
+Railway's Free plan currently includes 0.5 GB of volume storage, 0.5 GB of RAM and $1 of monthly usage credit. That is enough for a small survey deployment, but attachments and large response sets can exceed the storage limit. If Railway cannot verify the account or the credit is exhausted, use an always-free VM such as Oracle Cloud Always Free and run the same Docker image with a persistent volume.
+
+Back up the database from the Railway CLI with:
+
+```powershell
+railway run python -m backend.server --db /data/agal.sqlite --backup /data/agal-backup.sqlite
+```
+
 ### Your first survey
 
 1. Open the site and choose **New here? Create a free account**.
