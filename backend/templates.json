@@ -1,0 +1,26 @@
+[
+  {
+    "id": "agal-livelihood-starter",
+    "name": "AGAL Livelihood Research — starter",
+    "description": "Editable starting point for seaweed livelihood fieldwork. Review questions, consent, categories and locations before publishing.",
+    "config": {
+      "objectives": "Understand livelihood experiences and market participation. Replace with the approved study objectives.",
+      "consent": "We invite you to share your livelihood experiences. Participation is voluntary. You may skip a question or stop at any time. Please ask the researcher how this study uses and protects your responses before agreeing.",
+      "categories": [{"id":"farmer","label":"Seaweed farmer"},{"id":"buyer","label":"Buyer"},{"id":"cooperative","label":"Cooperative representative"}],
+      "locations": [],
+      "retention_days": 3650
+    },
+    "forms": [
+      {
+        "name": "Livelihood experience — editable starter",
+        "schema": {"sections":[{"id":"00000000-0000-4000-8000-000000000001","label":"Participation and livelihood","questions":[
+          {"id":"00000000-0000-4000-8000-000000000002","label":"Which role best describes your current participation?","type":"single","choices":[{"code":"farmer","label":"Seaweed farmer"},{"code":"buyer","label":"Buyer"},{"code":"cooperative","label":"Cooperative representative"},{"code":"other","label":"Another role"}]},
+          {"id":"00000000-0000-4000-8000-000000000003","label":"Please describe your role.","type":"text","condition":{"question_id":"00000000-0000-4000-8000-000000000002","op":"equals","value":"other"}},
+          {"id":"00000000-0000-4000-8000-000000000004","label":"How many years have you participated in this livelihood?","type":"number","validation":{"min":0,"max":100}},
+          {"id":"00000000-0000-4000-8000-000000000005","label":"Which challenges have you experienced?","type":"multiple","choices":[{"code":"weather","label":"Weather or environmental changes"},{"code":"price","label":"Unstable prices"},{"code":"transport","label":"Transportation"},{"code":"other","label":"Other challenges"}]},
+          {"id":"00000000-0000-4000-8000-000000000006","label":"What improvements would be most helpful?","type":"text","help":"Avoid recording names or contact details in this field."}
+        ]}]}
+      }
+    ]
+  }
+]

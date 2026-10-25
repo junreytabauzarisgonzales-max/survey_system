@@ -1,0 +1,78 @@
+import {test,expect} from '@playwright/test';
+import fs from 'node:fs/promises';
+
+test('create a survey from pasted questions, collect answers, see charts and export',async({page})=>{
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto('/');
+  await page.getByLabel('Email',{exact:true}).fill('browser@example.test');
+  await page.getByLabel('Password',{exact:true}).fill('browser-test-password');
+  await page.getByRole('button',{name:'Sign in →'}).click();
+  await expect(page.getByRole('heading',{name:'Home',exact:true})).toBeVisible();
+  await page.getByRole('navigation').getByRole('button',{name:/My Surveys$/}).click();
+  await page.getByLabel('Survey title',{exact:true}).fill('Community stories');
+  await page.getByLabel('Short description (optional)',{exact:true}).fill('A new, independent student survey');
+  await page.getByRole('button',{name:'Create survey →'}).click();
+  await expect(page.getByRole('heading',{name:'Questions',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Paste questions'}).click();
+  await page.getByLabel('Your questions').fill(`1. Custom story
+2. Activities (select all that apply)
+- Activity A
+- Activity B
+3. Hours studied today`);
+  await page.getByRole('button',{name:'Add 3 questions'}).click();
+  await expect(page.getByLabel('Question label',{exact:true})).toHaveCount(3);
+  await page.getByRole('button',{name:'Publish version →'}).click();
+  await expect(page.getByRole('status')).toContainText('Published version 1');
+  await page.getByRole('navigation').getByRole('button',{name:/Responses$/}).click();
+  await page.getByRole('combobox',{name:'Survey version',exact:true}).selectOption({label:'Community stories · v1'});
+  await page.getByRole('button',{name:'+ Add response'}).click();
+  await page.getByLabel('Respondent gave informed consent').check();
+  await page.getByLabel('Custom story',{exact:true}).fill('Kumusta, "ñ"\nFilipino 🌿');
+  await page.getByLabel('Activity A',{exact:true}).check();
+  await page.getByLabel('Activity B',{exact:true}).check();
+  await page.getByLabel('Hours studied today',{exact:true}).fill('3');
+  await page.getByRole('button',{name:'Save completed response',exact:true}).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('cell',{name:'completed',exact:true})).toBeVisible();
+  await page.getByRole('navigation').getByRole('button',{name:/Results$/}).click();
+  await expect(page.getByRole('heading',{name:'Responses over time'})).toBeVisible();
+  await expect(page.getByText('Average',{exact:true})).toBeVisible();
+  await expect(page.getByText('Hours studied today',{exact:true})).toBeVisible();
+  const summaryPromise=page.waitForEvent('download');
+  await page.getByRole('button',{name:'↓ Summary CSV'}).click();
+  const summary=await fs.readFile(await (await summaryPromise).path(),'utf8');
+  expect(summary).toContain('Hours studied today');
+  await page.getByRole('navigation').getByRole('button',{name:/Settings$/}).click();
+  await page.getByRole('button',{name:'Download data'}).click();
+  await expect(page.getByRole('heading',{name:'Download data',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Preview columns & record count'}).click();
+  await expect(page.getByText('1 response',{exact:true})).toBeVisible();
+  const downloadPromise=page.waitForEvent('download');
+  await page.getByRole('button',{name:'↓ Download CSV',exact:true}).click();
+  const download=await downloadPromise,content=await fs.readFile(await download.path(),'utf8');
+  expect(content).toContain('"Kumusta, ""ñ""\nFilipino 🌿"');
+  expect(content).toContain('__a');expect(content).toContain('__b');
+  await page.getByRole('button',{name:'View results'}).click();
+  await page.getByRole('navigation').getByRole('button',{name:/Questions$/}).click();
+  await page.getByRole('button',{name:'Edit questions'}).click();
+  await page.getByLabel('Question label',{exact:true}).first().fill('Revised story label');
+  await page.getByRole('button',{name:'Publish version →'}).click();
+  await expect(page.getByRole('status')).toContainText('Published version 2');
+  await page.getByRole('navigation').getByRole('button',{name:/Settings$/}).click();
+  await page.getByRole('button',{name:'Download data'}).click();
+  await page.getByRole('combobox',{name:'CSV structure',exact:true}).selectOption('long');
+  await page.getByRole('button',{name:'Preview columns & record count'}).click();
+  const longPromise=page.waitForEvent('download');
+  await page.getByRole('button',{name:'↓ Download CSV',exact:true}).click();
+  const longContent=await fs.readFile(await (await longPromise).path(),'utf8');
+  expect(longContent).toContain('Custom story');expect(longContent).not.toContain('Revised story label');
+  await page.getByRole('navigation').getByRole('button',{name:/My Surveys$/}).click();
+  const card=page.locator('.project-card').filter({hasText:'Community stories'});
+  await card.getByText('Survey options').click();
+  await card.getByRole('button',{name:'Delete survey'}).click();
+  await page.getByLabel('Type the survey title to confirm').fill('Community stories');
+  await page.getByRole('button',{name:'Delete permanently'}).click();
+  await expect(page.getByRole('status')).toContainText('deleted');
+  await expect(card).toHaveCount(0);
+  expect(errors).toEqual([]);
+});

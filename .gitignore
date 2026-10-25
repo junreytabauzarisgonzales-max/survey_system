@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+node_modules/
+dist/
+test-results/
+playwright-report/
+.dart_tool/
+build/
+local.properties
+*.keystore
+android/key.properties
