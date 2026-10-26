@@ -1,4 +1,5 @@
 import React,{useEffect,useMemo,useState} from 'react';
+import {createRealtimeClient} from '@neon/realtime/client';
 import {api,download,downloadManifest} from './api';
 import {saveBlob} from './device';
 import {allQuestions,conditionValue,defaults,isVisible,normalize,uuid,validate} from './core';
@@ -82,6 +83,46 @@ function Histogram({bins}){
   return <div className="histogram">{bins.map(bin=><div className="histogram-bin" key={bin.label} title={`${bin.label}: ${bin.count}`}><strong>{bin.count}</strong><div className="histogram-bar-wrap"><span style={{height:`${bin.count/max*100}%`}}/></div><small>{bin.label}</small></div>)}</div>;
 }
 
+function LiveResponses({project}){
+  const url=__NEON_REALTIME_URL__;
+  const [count,setCount]=useState(null),[status,setStatus]=useState('connecting');
+  useEffect(()=>{
+    if(!url)return undefined;
+    let closed=false,client,subscription,renewing=false;
+    const connect=async()=>{
+      try{
+        const sealed=await api(`/projects/${project.id}/live`);
+        if(closed)return;
+        if(!client)client=createRealtimeClient({url});
+        if(subscription){
+          subscription.renew(sealed);
+          return;
+        }
+        subscription=client.subscribe(sealed);
+        subscription.onChange(({data,status:next,error})=>{
+          if(closed)return;
+          if(error){setStatus('error');return;}
+          setStatus(next);
+          if(data?.length){
+            const row=data.find(item=>item.project_id===project.id)||data[0];
+            setCount(Number(row.response_count)||0);
+          }else setCount(0);
+          if(next==='stale'&&!renewing){
+            renewing=true;
+            connect().finally(()=>{renewing=false;});
+          }
+        });
+      }catch{
+        if(!closed)setStatus('unavailable');
+      }
+    };
+    connect();
+    return ()=>{closed=true;subscription?.unsubscribe();client?.close();};
+  },[project.id,url]);
+  if(!url)return null;
+  return <article className="card"><small>Live responses</small><strong>{count===null?'—':count}</strong><span>{status==='live'?'Updating in real time':status==='connecting'?'Connecting…':status==='stale'?'Refreshing…':'Live count unavailable'}</span></article>;
+}
+
 export function Analytics({project,forms,versions,act}){
   const [options,setOptions]=useState({status:'completed'}),[rows,setRows]=useState(null),[overview,setOverview]=useState(null),[group,setGroup]=useState(false);
   const load=async body=>{const [analysis,summary]=await Promise.all([api(`/projects/${project.id}/analytics`,body),api(`/projects/${project.id}/analytics-overview`,body)]);setRows(analysis);setOverview(summary);};
@@ -102,7 +143,7 @@ export function Analytics({project,forms,versions,act}){
       <label className="check"><input type="checkbox" checked={group} onChange={event=>setGroup(event.target.checked)}/>Compare results by location</label>
       <div className="toolbar"><button className="primary" onClick={()=>act(()=>load({...options,group_by_location:group}))}>Show results</button><span className="grow"/>{rows&&<><button onClick={()=>act(summary)}>↓ Summary CSV</button><button onClick={()=>window.print()}>Print / save PDF</button></>}</div>
     </div>
-    {overview&&<><div className="stats results-stats">{[['Total responses',overview.total],['Completed',overview.completed],['Drafts',overview.draft],['Days collecting',overview.timeline.length]].map(([label,value])=><article className="card" key={label}><small>{label}</small><strong>{value}</strong></article>)}</div><div className="card"><div className="toolbar"><h2 className="grow">Responses over time</h2><span className="badge">{overview.total} total</span></div><Timeline data={overview.timeline}/></div></>}
+    {overview&&<><div className="stats results-stats">{[['Total responses',overview.total],['Completed',overview.completed],['Drafts',overview.draft],['Days collecting',overview.timeline.length]].map(([label,value])=><article className="card" key={label}><small>{label}</small><strong>{value}</strong></article>)}<LiveResponses project={project}/></div><div className="card"><div className="toolbar"><h2 className="grow">Responses over time</h2><span className="badge">{overview.total} total</span></div><Timeline data={overview.timeline}/></div></>}
     {rows&&rows.length===0&&<div className="empty">No responses match these choices yet. Try choosing “All responses” or removing a filter.</div>}
     {rows&&rows.map(row=>{const version=versions.find(item=>item.id===row.version_id);const categorical=['single','multiple','boolean'].includes(row.type);const numeric=['number','currency','rating'].includes(row.type);const states=Object.entries(row.states).filter(([state])=>state!=='answered');
       return <article className="card result-card" key={row.version_id+row.question_id+row.group}>
@@ -137,7 +178,7 @@ export function Interviews({project,versions,interviews,setInterviews,act,reload
     else setEditing({...editing,revision:result.revision,answers});
     return result;
   };
-  const attach=async(q,file)=>{if(file.size>10*1024*1024)throw new Error('Maximum attachment size is 10 MiB.');let revision=editing.revision;if(!revision){const saved=await save('draft',false);revision=saved.revision;}const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file);});const id=uuid();await api(`/interviews/${editing.id}/attachments`,{id,question_id:q.id,filename:file.name,mime:file.type,content});setEditing({...editing,revision,answers:{...editing.answers,[q.id]:{state:'answered',value:[...(editing.answers[q.id]?.value||[]),id]}}});};
+  const attach=async(q,file)=>{const limit=import.meta.env.MODE==='hosted'?2:10;if(file.size>limit*1024*1024)throw new Error(`Maximum attachment size is ${limit} MiB.`);let revision=editing.revision;if(!revision){const saved=await save('draft',false);revision=saved.revision;}const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file);});const id=uuid();await api(`/interviews/${editing.id}/attachments`,{id,question_id:q.id,filename:file.name,mime:file.type,content});setEditing({...editing,revision,answers:{...editing.answers,[q.id]:{state:'answered',value:[...(editing.answers[q.id]?.value||[]),id]}}});};
   return <><div className="card toolbar"><label className="grow">Survey version<select value={versionId} onChange={e=>setVersionId(e.target.value)}><option value="">Select a version to add a response</option>{versions.map(v=><option key={v.id} value={v.id}>{v.schema.form_name} · v{v.number}</option>)}</select></label><button disabled={!versionId||!!project.archived||project.access.role==='viewer'} className="primary" onClick={()=>open({id:uuid(),version_id:versionId,status:'draft',answers:defaults(versions.find(v=>v.id===versionId).schema),consent:false,created_at:new Date().toISOString()})}>+ Add response</button></div>
     <div className="card"><table>
       <thead><tr><th>Response</th><th>Questionnaire</th><th>Source</th><th>Status</th><th>Collected</th><th/></tr></thead>

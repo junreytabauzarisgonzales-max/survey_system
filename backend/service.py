@@ -6,8 +6,9 @@ import secrets
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
-from .db import connect, encode, history, new_id, now, password_hash
+from .db import connect, encode, history, is_postgres, new_id, now, password_hash
 from .model import Problem, questions, require, text, uid, validate_answers, validate_config, validate_schema
+from .neon_services import NEON_PASSWORD_PREFIX, attachment_content, insert_attachment, row_value
 from .public import PublicSurveys
 
 
@@ -23,8 +24,11 @@ def unpack(row, *fields):
 
 
 class Service(PublicSurveys):
-    def __init__(self, path):
+    def __init__(self, path, attachment_limit=10 * 1024 * 1024, auth=None, storage=None):
         self.path = path
+        self.attachment_limit = attachment_limit
+        self.auth = auth
+        self.storage = storage
 
     @staticmethod
     def _session(c, user):
@@ -34,11 +38,36 @@ class Service(PublicSurveys):
         return {'token': token, 'expires_at': expires, 'user': {k: user[k] for k in ('id', 'name', 'email', 'admin')}}
 
     def login(self, data):
+        email = str(data.get('email', '')).lower()
+        password = str(data.get('password', ''))
+        neon_user = None
+        if self.auth:
+            try:
+                neon_user = self.auth.sign_in(email, password)
+            except Problem as error:
+                if error.status != 401:
+                    raise
         with connect(self.path) as c:
-            user = c.execute('SELECT * FROM users WHERE email=? AND active=1', (str(data.get('email', '')).lower(),)).fetchone()
-            # Hash even unknown users to reduce account enumeration timing differences.
-            hashed = password_hash(str(data.get('password', '')), user['password'].split(':')[0] if user else '0' * 32)
-            require(user and hmac.compare_digest(hashed, user['password']), 'Invalid credentials', 401)
+            user = c.execute('SELECT * FROM users WHERE email=? AND active=1', (email,)).fetchone()
+            if neon_user is not None:
+                if user is None:
+                    identifier = str(neon_user.get('id') or new_id())
+                    if c.execute('SELECT 1 FROM users WHERE id=?', (identifier,)).fetchone():
+                        identifier = new_id()
+                    name = text(neon_user.get('name') or email.split('@')[0], 'name', 300)
+                    c.execute('INSERT INTO users(id,email,name,password,admin,active) VALUES(?,?,?,?,0,1)',
+                              (identifier, email, name, NEON_PASSWORD_PREFIX + str(neon_user.get('id') or '')))
+                    user = c.execute('SELECT * FROM users WHERE id=?', (identifier,)).fetchone()
+                    history(c, 'user', identifier, identifier, {'email': email, 'name': name, 'provider': 'neon-auth'})
+                elif not user['password'].startswith(NEON_PASSWORD_PREFIX):
+                    c.execute('UPDATE users SET password=? WHERE id=?', (NEON_PASSWORD_PREFIX + str(neon_user.get('id') or ''), user['id']))
+                return self._session(c, user)
+            # Accounts created before Neon Auth remain usable with their local
+            # password. New hosted accounts never store one.
+            local_allowed = user is not None and (not self.auth or not user['password'].startswith(NEON_PASSWORD_PREFIX))
+            salt = user['password'].split(':')[0] if user and ':' in user['password'] else '0' * 32
+            hashed = password_hash(password, salt)
+            require(local_allowed and hmac.compare_digest(hashed, user['password']), 'Invalid credentials', 401)
             return self._session(c, user)
 
     def register(self, data):
@@ -48,6 +77,21 @@ class Service(PublicSurveys):
         name = text(data.get('name'), 'name', 300)
         password = text(data.get('password'), 'password', 1000)
         require(len(password) >= 8, 'Password must contain at least 8 characters')
+        if self.auth:
+            with connect(self.path) as c:
+                require(not c.execute('SELECT 1 FROM users WHERE email=?', (email,)).fetchone(), 'An account with this email already exists', 409)
+            neon_user = self.auth.sign_up(email, password, name)
+            with connect(self.path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                require(not c.execute('SELECT 1 FROM users WHERE email=?', (email,)).fetchone(), 'An account with this email already exists', 409)
+                identifier = str(neon_user.get('id') or new_id())
+                if c.execute('SELECT 1 FROM users WHERE id=?', (identifier,)).fetchone():
+                    identifier = new_id()
+                c.execute('INSERT INTO users(id,email,name,password,admin,active) VALUES(?,?,?,?,0,1)',
+                          (identifier, email, name, NEON_PASSWORD_PREFIX + str(neon_user.get('id') or '')))
+                history(c, 'user', identifier, identifier, {'email': email, 'name': name, 'provider': 'neon-auth'})
+                user = c.execute('SELECT * FROM users WHERE id=?', (identifier,)).fetchone()
+                return self._session(c, user)
         with connect(self.path) as c:
             c.execute('BEGIN IMMEDIATE')
             require(not c.execute('SELECT 1 FROM users WHERE email=?', (email,)).fetchone(), 'An account with this email already exists', 409)
@@ -120,6 +164,7 @@ class Service(PublicSurveys):
             return {'id': target}
 
     def delete_project(self, actor, project, data):
+        storage_keys = []
         with connect(self.path) as c:
             c.execute('BEGIN IMMEDIATE')
             target = self.access(c, actor, project, 'manage')['project']
@@ -130,6 +175,9 @@ class Service(PublicSurveys):
             interviews = [r['id'] for r in c.execute('SELECT id FROM interviews WHERE project_id=?', (project,))]
             respondents = [r['id'] for r in c.execute('SELECT id FROM respondents WHERE project_id=?', (project,))]
             attachments = [r['id'] for r in c.execute('SELECT a.id FROM attachments a JOIN interviews i ON i.id=a.interview_id WHERE i.project_id=?', (project,))]
+            if self.storage:
+                storage_keys = [row_value(r, 'storage_key') for r in c.execute(
+                    'SELECT a.storage_key FROM attachments a JOIN interviews i ON i.id=a.interview_id WHERE i.project_id=?', (project,))]
 
             def delete_in(table, column, ids):
                 if ids:
@@ -147,11 +195,15 @@ class Service(PublicSurveys):
             c.execute('DELETE FROM export_audits WHERE project_id=?', (project,))
             c.execute('DELETE FROM retention_events WHERE project_id=?', (project,))
             c.execute('DELETE FROM memberships WHERE project_id=?', (project,))
-            c.execute("DELETE FROM sync_events WHERE json_extract(result, '$.project_id')=?", (project,))
+            project_field = "result::jsonb->>'project_id'" if is_postgres(self.path) else "json_extract(result, '$.project_id')"
+            c.execute(f'DELETE FROM sync_events WHERE {project_field}=?', (project,))
             resources = [project, *forms, *versions, *links, *interviews, *respondents, *attachments]
             c.execute("DELETE FROM history WHERE resource_type IN ('project','form','version','membership','respondent','public_link','attachment') AND resource_id IN (" + ",".join("?" for _ in resources) + ")", resources)
             c.execute('DELETE FROM projects WHERE id=?', (project,))
-            return {'deleted': True, 'id': project, 'forms': len(forms), 'versions': len(versions), 'links': len(links), 'responses': len(interviews)}
+            result = {'deleted': True, 'id': project, 'forms': len(forms), 'versions': len(versions), 'links': len(links), 'responses': len(interviews)}
+        if self.storage:
+            self.storage.delete(storage_keys)
+        return result
 
     def templates(self):
         return json.loads((Path(__file__).parent / 'templates.json').read_text(encoding='utf-8'))
@@ -333,7 +385,7 @@ class Service(PublicSurveys):
         require(1 <= limit <= 500, 'Limit must be 1–500')
         with connect(self.path) as c:
             access = self.access(c, actor, project)
-            rows = c.execute('SELECT i.*,v.schema FROM interviews i JOIN versions v ON v.id=i.version_id WHERE i.project_id=? AND i.id>? AND (?!=\'researcher\' OR i.researcher_id=?) AND (? IS NULL OR i.id=?) ORDER BY i.id LIMIT ?', (project, after, access['role'], actor['id'], interview_id, interview_id, limit))
+            rows = c.execute('SELECT i.*,v.schema FROM interviews i JOIN versions v ON v.id=i.version_id WHERE i.project_id=? AND i.id>? AND (?!=\'researcher\' OR i.researcher_id=?) AND (CAST(? AS TEXT) IS NULL OR i.id=?) ORDER BY i.id LIMIT ?', (project, after, access['role'], actor['id'], interview_id, interview_id, limit))
             result = []
             for row in rows:
                 item = unpack(row, 'answers', 'schema')
@@ -401,6 +453,7 @@ class Service(PublicSurveys):
             return [unpack(r, 'snapshot') for r in c.execute('SELECT * FROM history WHERE resource_type=? AND resource_id=? ORDER BY created_at,id', (kind, resource))]
 
     def retention(self, actor, project):
+        storage_keys = []
         with connect(self.path) as c:
             c.execute('BEGIN IMMEDIATE')
             config = self.access(c, actor, project, 'manage')['project']['config']
@@ -408,13 +461,19 @@ class Service(PublicSurveys):
             targets = 'SELECT id FROM interviews WHERE project_id=? AND created_at<?'
             args = (project, cutoff)
             count = c.execute(f'SELECT COUNT(*) FROM interviews WHERE id IN ({targets})', args).fetchone()[0]
+            if self.storage:
+                storage_keys = [row_value(r, 'storage_key') for r in c.execute(
+                    f'SELECT storage_key FROM attachments WHERE interview_id IN ({targets})', args)]
             c.execute(f'DELETE FROM attachments WHERE interview_id IN ({targets})', args)
             c.execute(f'DELETE FROM corrections WHERE interview_id IN ({targets})', args)
             c.execute(f'DELETE FROM interviews WHERE id IN ({targets})', args)
             c.execute('DELETE FROM history WHERE resource_type=\'respondent\' AND resource_id IN (SELECT id FROM respondents WHERE project_id=? AND created_at<? AND id NOT IN (SELECT respondent_id FROM interviews WHERE respondent_id IS NOT NULL))', args)
             c.execute('DELETE FROM respondents WHERE project_id=? AND created_at<? AND id NOT IN (SELECT respondent_id FROM interviews WHERE respondent_id IS NOT NULL)', args)
             c.execute('INSERT INTO retention_events VALUES(?,?,?,?,?,?)', (new_id(), project, actor['id'], count, cutoff, now()))
-            return {'deleted_interviews': count, 'cutoff': cutoff}
+            result = {'deleted_interviews': count, 'cutoff': cutoff}
+        if self.storage:
+            self.storage.delete(storage_keys)
+        return result
 
     def attachment(self, actor, interview, data):
         with connect(self.path) as c:
@@ -429,14 +488,26 @@ class Service(PublicSurveys):
                 content = base64.b64decode(data.get('content', ''), validate=True)
             except (ValueError, TypeError):
                 raise Problem('Invalid base64 attachment')
-            require(0 < len(content) <= 10 * 1024 * 1024, 'Attachment must be 1 byte–10 MiB')
+            require(0 < len(content) <= self.attachment_limit, f'Attachment must be 1 byte–{self.attachment_limit // (1024 * 1024)} MiB')
             filename = text(data.get('filename'), 'filename', 255)
             mime = data.get('mime')
             require(mime in ('image/jpeg', 'image/png', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'application/pdf'), 'Unsupported media type')
             prior = c.execute('SELECT * FROM attachments WHERE id=?', (aid,)).fetchone()
             if prior:
-                require(prior['interview_id'] == interview and prior['content'] == content and prior['question_id'] == qid and prior['filename'] == filename and prior['mime'] == mime, 'Attachment ID conflict', 409)
+                prior_content = attachment_content(prior, self.storage)
+                require(prior['interview_id'] == interview and prior_content == content and prior['question_id'] == qid and prior['filename'] == filename and prior['mime'] == mime, 'Attachment ID conflict', 409)
             else:
-                c.execute('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)', (aid, interview, qid, filename, mime, content, now()))
+                key = self.storage.key(interview, aid) if self.storage else None
+                if self.storage:
+                    self.storage.put(key, content, mime)
+                try:
+                    insert_attachment(c, self.storage, aid, interview, qid, filename, mime, content, now(), key)
+                except Exception:
+                    if self.storage:
+                        self.storage.delete([key])
+                    raise
                 history(c, 'attachment', aid, actor['id'], {'interview_id': interview, 'filename': filename})
             return {'id': aid}
+
+    def read_attachment(self, row):
+        return attachment_content(row, self.storage)

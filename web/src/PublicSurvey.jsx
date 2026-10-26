@@ -53,8 +53,9 @@ export function PublicSurvey({token}) {
 
   async function attach(question, file) {
     setError('');
-    if (file.size === 0 || file.size + files.reduce((n, f) => n + f.size, 0) > 10 * 1024 * 1024) {
-      setError('Please choose files totaling no more than 10 MiB.'); return;
+    const limit = survey?.attachment_limit || 10 * 1024 * 1024;
+    if (file.size === 0 || file.size + files.reduce((n, f) => n + f.size, 0) > limit) {
+      setError(`Please choose files totaling no more than ${limit / (1024 * 1024)} MiB.`); return;
     }
     setBusy(true);
     try {

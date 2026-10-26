@@ -57,11 +57,11 @@ Generated packages and manifests are ignored by Git. Their presence in a develop
 
 ## Deploy the public website on Vercel
 
-The root `vercel.json` installs/builds the website and publishes `web/dist`. It includes rewrites for the three documentation routes and download headers for bundled EXE/APK files.
+The root `vercel.json` now runs `npm run build:vercel`, publishing the documentation site plus the online survey interface at `/app/`. It also deploys the Python API with Neon PostgreSQL support, adds public `/survey/<token>` routing, and retains the documentation-route rewrites and package download headers. A plain `npm run build` still produces the static-only website.
 
-**Git integration:** import this repository, keep the root directory at the repository root, and use the supplied configuration. Configure the external download URL environment variables if the files are hosted separately. No backend deployment, API variables, SQLite volume or Python runtime is needed.
+**Git integration:** import this repository, keep the root directory at the repository root, and use the supplied configuration. Configure the external download URL environment variables if the files are hosted separately. Add the server-side `DATABASE_URL` and `AUTO_MIGRATE` variables to enable the online workspace; see [Vercel + Neon](VERCEL_NEON.md). The documentation pages themselves remain static and do not access the survey database.
 
-**Local CLI deployment:** build/stage your packages first, then run `vercel --prod` from the repository root. `.vercelignore` excludes the backend, native build environments and intermediate outputs while including `web/public/releases/` for upload. The Vercel build runs again using the staged files.
+**Local CLI deployment:** build/stage your packages first, then run `vercel --prod` from the repository root. `.vercelignore` includes the backend, PostgreSQL migrations and `web/public/releases/`, while excluding native build environments, tests, local environment files and intermediate outputs. The Vercel build runs again using the staged files.
 
 The deployment must be initiated separately; adding configuration does not publish the website or packages automatically.
 

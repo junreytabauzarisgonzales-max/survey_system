@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from .db import connect, encode, history, new_id, now
 from .model import Problem, questions, require, text, uid, validate_answers
+from .neon_services import insert_attachment
 
 MEDIA_TYPES = {'image/jpeg', 'image/png', 'audio/mp4', 'audio/mpeg', 'audio/wav', 'application/pdf'}
 
@@ -95,53 +96,64 @@ class PublicSurveys:
             # Deliberately do not serialize link records, staff, profile fields,
             # project configuration, other forms, or existing interview values.
             return {'title': json.loads(row['schema'])['form_name'], 'project_name': row['project_name'],
-                    'version_number': row['number'], 'schema': json.loads(row['schema']), 'locations': json.loads(row['locations'])}
+                    'version_number': row['number'], 'schema': json.loads(row['schema']), 'locations': json.loads(row['locations']),
+                    'attachment_limit': self.attachment_limit}
 
     def submit_public(self, token, data):
         require(set(data) <= {'submission_id', 'answers', 'consent', 'location_consent', 'location', 'attachments'}, 'Unknown public submission fields')
         submission_id = uid(data.get('submission_id'))
         fingerprint = hashlib.sha256(json.dumps(data, ensure_ascii=False, separators=(',', ':'), sort_keys=True, allow_nan=False).encode()).hexdigest()
-        with connect(self.path) as c:
-            c.execute('BEGIN IMMEDIATE')
-            row = self._public_link(c, token, live=False)
-            prior = c.execute('SELECT * FROM public_receipts WHERE submission_id=?', (submission_id,)).fetchone()
-            if prior:
-                require(prior['link_id'] == row['id'] and prior['fingerprint'] == fingerprint, 'Submission key was already used for different answers', 409)
-                # Acknowledging an existing receipt remains safe after closure/retention.
-                return {'submitted': True, 'receipt': prior['receipt']}
-            self._public_link(c, token)
-            require(data.get('consent') is True, 'Consent is required to submit this survey')
-            require(isinstance(data.get('location_consent', False), bool), 'Location consent must be boolean')
-            schema = json.loads(row['schema'])
-            answers = validate_answers(schema, data.get('answers', {}), complete=True, location_consent=data.get('location_consent', False))
-            location = data.get('location') or None
-            require(location is None or location in {loc['id'] for loc in json.loads(row['locations'])}, 'Unknown survey location')
-            files = data.get('attachments', [])
-            require(isinstance(files, list) and len(files) <= 20, 'Use up to 20 attachments per response')
-            referenced = {q['id']: answers[q['id']].get('value', []) for q in questions(schema) if q['type'] == 'media'}
-            expected = {(qid, aid) for qid, aids in referenced.items() for aid in aids}
-            require(len({aid for _, aid in expected}) == sum(len(aids) for aids in referenced.values()), 'Duplicate attachment reference')
-            stored, found, total = [], set(), 0
-            for file in files:
-                require(isinstance(file, dict), 'Invalid attachment')
-                aid, qid = uid(file.get('id')), uid(file.get('question_id'))
-                require((qid, aid) in expected and aid not in found, 'Attachment does not match a recorded media answer')
-                found.add(aid)
-                require(file.get('mime') in MEDIA_TYPES, 'Unsupported media type')
-                name = text(file.get('filename'), 'filename', 255)
-                try:
-                    content = base64.b64decode(file.get('content', ''), validate=True)
-                except (ValueError, TypeError):
-                    raise Problem('Invalid base64 attachment')
-                total += len(content)
-                require(0 < len(content) <= 10 * 1024 * 1024 and total <= 10 * 1024 * 1024, 'Total attachments must be at most 10 MiB')
-                require(not c.execute('SELECT 1 FROM attachments WHERE id=?', (aid,)).fetchone(), 'Attachment identifier already used', 409)
-                stored.append((aid, qid, name, file['mime'], content))
-            require(found == {aid for _, aid in expected}, 'Every attachment reference requires its own file')
-            iid, receipt, stamp = new_id(), new_id(), now()
-            c.execute("INSERT INTO interviews(id,project_id,version_id,researcher_id,respondent_id,location,status,answers,consent,location_consent,created_at,updated_at,revision,source,public_link_id) VALUES(?,?,?,NULL,NULL,?,'completed',?,1,?,?,?,1,'public_link',?)",
-                      (iid, row['project_id'], row['version_id'], location, encode(answers), data.get('location_consent', False), stamp, stamp, row['id']))
-            for aid, qid, name, mime, content in stored:
-                c.execute('INSERT INTO attachments VALUES(?,?,?,?,?,?,?)', (aid, iid, qid, name, mime, content, stamp))
-            c.execute('INSERT INTO public_receipts VALUES(?,?,?,?,?,?)', (submission_id, row['id'], fingerprint, iid, receipt, stamp))
-            return {'submitted': True, 'receipt': receipt}
+        uploaded = []
+        try:
+            with connect(self.path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                row = self._public_link(c, token, live=False)
+                prior = c.execute('SELECT * FROM public_receipts WHERE submission_id=?', (submission_id,)).fetchone()
+                if prior:
+                    require(prior['link_id'] == row['id'] and prior['fingerprint'] == fingerprint, 'Submission key was already used for different answers', 409)
+                    # Acknowledging an existing receipt remains safe after closure/retention.
+                    return {'submitted': True, 'receipt': prior['receipt']}
+                self._public_link(c, token)
+                require(data.get('consent') is True, 'Consent is required to submit this survey')
+                require(isinstance(data.get('location_consent', False), bool), 'Location consent must be boolean')
+                schema = json.loads(row['schema'])
+                answers = validate_answers(schema, data.get('answers', {}), complete=True, location_consent=data.get('location_consent', False))
+                location = data.get('location') or None
+                require(location is None or location in {loc['id'] for loc in json.loads(row['locations'])}, 'Unknown survey location')
+                files = data.get('attachments', [])
+                require(isinstance(files, list) and len(files) <= 20, 'Use up to 20 attachments per response')
+                referenced = {q['id']: answers[q['id']].get('value', []) for q in questions(schema) if q['type'] == 'media'}
+                expected = {(qid, aid) for qid, aids in referenced.items() for aid in aids}
+                require(len({aid for _, aid in expected}) == sum(len(aids) for aids in referenced.values()), 'Duplicate attachment reference')
+                stored, found, total = [], set(), 0
+                for file in files:
+                    require(isinstance(file, dict), 'Invalid attachment')
+                    aid, qid = uid(file.get('id')), uid(file.get('question_id'))
+                    require((qid, aid) in expected and aid not in found, 'Attachment does not match a recorded media answer')
+                    found.add(aid)
+                    require(file.get('mime') in MEDIA_TYPES, 'Unsupported media type')
+                    name = text(file.get('filename'), 'filename', 255)
+                    try:
+                        content = base64.b64decode(file.get('content', ''), validate=True)
+                    except (ValueError, TypeError):
+                        raise Problem('Invalid base64 attachment')
+                    total += len(content)
+                    require(0 < len(content) <= self.attachment_limit and total <= self.attachment_limit, f'Total attachments must be at most {self.attachment_limit // (1024 * 1024)} MiB')
+                    require(not c.execute('SELECT 1 FROM attachments WHERE id=?', (aid,)).fetchone(), 'Attachment identifier already used', 409)
+                    stored.append((aid, qid, name, file['mime'], content))
+                require(found == {aid for _, aid in expected}, 'Every attachment reference requires its own file')
+                iid, receipt, stamp = new_id(), new_id(), now()
+                c.execute("INSERT INTO interviews(id,project_id,version_id,researcher_id,respondent_id,location,status,answers,consent,location_consent,created_at,updated_at,revision,source,public_link_id) VALUES(?,?,?,NULL,NULL,?,'completed',?,1,?,?,?,1,'public_link',?)",
+                          (iid, row['project_id'], row['version_id'], location, encode(answers), data.get('location_consent', False), stamp, stamp, row['id']))
+                for aid, qid, name, mime, content in stored:
+                    key = self.storage.key(iid, aid) if self.storage else None
+                    if self.storage:
+                        self.storage.put(key, content, mime)
+                        uploaded.append(key)
+                    insert_attachment(c, self.storage, aid, iid, qid, name, mime, content, stamp, key)
+                c.execute('INSERT INTO public_receipts VALUES(?,?,?,?,?,?)', (submission_id, row['id'], fingerprint, iid, receipt, stamp))
+                return {'submitted': True, 'receipt': receipt}
+        except Exception:
+            if self.storage and uploaded:
+                self.storage.delete(uploaded)
+            raise

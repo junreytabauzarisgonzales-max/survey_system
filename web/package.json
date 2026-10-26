@@ -8,13 +8,16 @@
     "dev:app": "vite --mode app --host 127.0.0.1",
     "build": "node scripts/prepare-downloads.mjs && vite build",
     "build:app": "vite build --mode app",
+    "build:vercel": "node scripts/prepare-downloads.mjs && vite build --mode portal && vite build --mode hosted && node scripts/merge-hosted.mjs",
     "prepare:downloads": "node scripts/prepare-downloads.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "test": "node --test src/core.test.js",
     "test:e2e": "playwright test",
-    "test:site": "playwright test --config playwright.site.config.js"
+    "test:site": "playwright test --config playwright.site.config.js",
+    "test:hosted": "playwright test --config playwright.hosted.config.js"
   },
   "dependencies": {
+    "@neon/realtime": "^0.1.2",
     "react": "19.2.0",
     "react-dom": "19.2.0"
   },

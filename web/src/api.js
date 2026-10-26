@@ -3,6 +3,7 @@ import {saveBlob} from './device';
 let token = '';
 try { token = sessionStorage.getItem('agal-token') || ''; } catch { /* Browser storage is optional for public surveys. */ }
 export function setToken(value) { token=value; value ? sessionStorage.setItem('agal-token',value) : sessionStorage.removeItem('agal-token'); }
+export function getToken() { return token; }
 export async function api(path, body, method) {
   const response = await fetch('/api'+path, {method:method || (body ? 'POST':'GET'), headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:body ? JSON.stringify(body):undefined});
   if (!response.ok) { const error = await response.json(); throw new Error(error.error || 'Request failed'); }

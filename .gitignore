@@ -1,10 +1,14 @@
 __pycache__/
 *.pyc
 .venv/
+.env
+.env.*
+!.env.example
 data/
 node_modules/
 dist/
 app-dist/
+hosted-dist/
 web/public/releases/*.exe
 web/public/releases/*.apk
 web/public/releases/downloads.json
@@ -15,3 +19,6 @@ build/
 local.properties
 *.keystore
 android/key.properties
+.neon
+.agents/
+skills-lock.json

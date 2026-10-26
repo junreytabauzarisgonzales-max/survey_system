@@ -10,3 +10,7 @@ web/playwright-report
 __pycache__
 *.pyc
 .venv
+.env
+.env.*
+web/app-dist
+web/hosted-dist

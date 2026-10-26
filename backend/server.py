@@ -4,12 +4,16 @@ import hashlib
 import json
 import logging
 import mimetypes
+import os
 import sqlite3
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import Request, urlopen
 
 from .db import backup, bootstrap, connect, migrate, now
 from .exports import Export, analytics, analytics_overview
@@ -19,9 +23,9 @@ from .service import Service
 LOG = logging.getLogger('agal')
 
 
-def handler_for(service, web_root=None):
+def handler_for(service, web_root=None, *, rate_limiter=None, trust_proxy=False,
+                max_body_bytes=15 * 1024 * 1024, max_response_bytes=None):
     attempts = {}
-    public_attempts = {}
     lock = threading.Lock()
 
     class Handler(BaseHTTPRequestHandler):
@@ -51,12 +55,33 @@ def handler_for(service, web_root=None):
 
         def result(self, data, status=200):
             content = json.dumps(data, ensure_ascii=False, allow_nan=False).encode('utf-8')
+            if max_response_bytes and len(content) > max_response_bytes:
+                return self.result({'error': 'Response is too large; request fewer records.'}, 413)
             self.send_response(status)
             self.headers_common()
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+
+        def limit_request(self, category, limit, message):
+            address = self.client_address[0]
+            if trust_proxy:
+                address = self.headers.get('x-vercel-forwarded-for', self.headers.get('x-forwarded-for', address)).split(',')[0].strip()
+            key = (category, address)
+            if rate_limiter is not None:
+                require(rate_limiter(category + ':' + address, limit), message, 429)
+                return
+            with lock:
+                current = time.monotonic()
+                if key not in attempts and len(attempts) >= 4096:
+                    for expired in list(attempts):
+                        if not attempts[expired] or attempts[expired][-1] < current - 60:
+                            del attempts[expired]
+                    require(len(attempts) < 4096, 'Please try again shortly', 429)
+                recent = [stamp for stamp in attempts.get(key, []) if stamp > current - 60]
+                require(len(recent) < limit, message, 429)
+                attempts[key] = recent + [current]
 
         def handle_request(self):
             try:
@@ -67,7 +92,7 @@ def handler_for(service, web_root=None):
                 self.result({'error': 'Invalid request: ' + str(e)}, 400)
             except sqlite3.IntegrityError:
                 self.result({'error': 'Conflicting identifier or immutable record'}, 409)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
             except Exception:
                 LOG.exception('Request failed')
@@ -83,37 +108,21 @@ def handler_for(service, web_root=None):
             length = int(self.headers.get('Content-Length', 0))
             if method in ('POST', 'PUT', 'DELETE'):
                 if method != 'DELETE' or length:
-                    require(0 < length <= 15 * 1024 * 1024, 'Request body must be 1 byte�?"15 MiB', 413)
+                    require(0 < length <= max_body_bytes, f'Request body must be 1 byte–{max_body_bytes // (1024 * 1024)} MiB', 413)
                     data = json.loads(self.rfile.read(length))
                     require(isinstance(data, dict), 'Request object required')
             if path == ['api', 'health']:
                 return self.result({'status': 'ok'})
+            if method == 'GET' and len(path) == 4 and path[1] == 'projects' and path[3] == 'live' and os.environ.get('REALTIME_SEAL_URL'):
+                return self.proxy_realtime(path[2])
             if path == ['api', 'login'] and method == 'POST':
-                address = self.client_address[0]
-                with lock:
-                    recent = [t for t in attempts.get(address, []) if t > time.monotonic() - 60]
-                    require(len(recent) < 10, 'Too many login attempts; retry in one minute', 429)
-                    attempts[address] = recent + [time.monotonic()]
+                self.limit_request('login', 10, 'Too many login attempts; retry in one minute')
                 return self.result(service.login(data))
             if path == ['api', 'register'] and method == 'POST':
-                address = 'register:' + self.client_address[0]
-                with lock:
-                    recent = [t for t in attempts.get(address, []) if t > time.monotonic() - 60]
-                    require(len(recent) < 5, 'Too many sign-up attempts; retry in one minute', 429)
-                    attempts[address] = recent + [time.monotonic()]
+                self.limit_request('register', 5, 'Too many sign-up attempts; retry in one minute')
                 return self.result(service.register(data))
             if len(path) >= 4 and path[1:3] == ['public', 'surveys']:
-                address = (self.client_address[0], method)
-                with lock:
-                    current = time.monotonic()
-                    if address not in public_attempts and len(public_attempts) >= 4096:
-                        for key in list(public_attempts):
-                            if not public_attempts[key] or public_attempts[key][-1] < current - 60:
-                                del public_attempts[key]
-                        require(len(public_attempts) < 4096, 'Please try again shortly', 429)
-                    recent = [t for t in public_attempts.get(address, []) if t > current - 60]
-                    require(len(recent) < (60 if method == 'POST' else 180), 'Too many survey requests; retry in one minute', 429)
-                    public_attempts[address] = recent + [current]
+                self.limit_request('public:' + method, 60 if method == 'POST' else 180, 'Too many survey requests; retry in one minute')
                 if len(path) == 4 and method == 'GET':
                     return self.result(service.public_survey(path[3]))
                 if len(path) == 5 and path[4] == 'responses' and method == 'POST':
@@ -213,13 +222,15 @@ def handler_for(service, web_root=None):
                     require(row, 'Attachment not found', 404)
                     access = service.access(c, actor, row['project_id'])
                     require(access['identifiable'] and (access['role'] != 'researcher' or row['researcher_id'] == actor['id']), 'Attachment access denied', 403)
+                    content = service.read_attachment(row)
+                    require(not max_response_bytes or len(content) <= max_response_bytes, 'Attachment exceeds this host\'s download limit', 413)
                     self.send_response(200)
                     self.headers_common()
                     self.send_header('Content-Type', row['mime'])
                     self.send_header('Content-Disposition', 'attachment; filename="attachment-' + row['id'] + '"')
-                    self.send_header('Content-Length', str(len(row['content'])))
+                    self.send_header('Content-Length', str(len(content)))
                     self.end_headers()
-                    self.wfile.write(row['content'])
+                    self.wfile.write(content)
                     return
             if len(path) == 4 and path[1] == 'exports' and path[3] == 'manifest' and method == 'GET':
                 with connect(service.path) as c:
@@ -238,6 +249,22 @@ def handler_for(service, web_root=None):
                 iterator = export.dictionary() if path[2] == 'dictionary' else export.stream()
                 # Open the export snapshot before sending headers.
                 first = next(iterator)
+                spool = None
+                if max_response_bytes:
+                    # Check the complete hosted export before sending headers,
+                    # rather than return a truncated CSV at a platform size limit.
+                    spool = tempfile.SpooledTemporaryFile(max_size=512 * 1024)
+                    try:
+                        spool.write(first)
+                        for chunk in iterator:
+                            require(spool.tell() + len(chunk) <= max_response_bytes, 'Export is too large for this host; narrow the export filters.', 413)
+                            spool.write(chunk)
+                        spool.seek(0)
+                    except Exception:
+                        spool.close()
+                        raise
+                    finally:
+                        iterator.close()
                 self.send_response(200)
                 self.headers_common()
                 self.send_header('Content-Type', 'text/csv; charset=utf-8')
@@ -247,13 +274,35 @@ def handler_for(service, web_root=None):
                 self.send_header('X-Export-ID', export.audit_id if path[2] == 'csv' else '')
                 self.end_headers()
                 try:
-                    self.wfile.write(first)
-                    for chunk in iterator:
-                        self.wfile.write(chunk)
+                    if spool is not None:
+                        while chunk := spool.read(64 * 1024):
+                            self.wfile.write(chunk)
+                    else:
+                        self.wfile.write(first)
+                        for chunk in iterator:
+                            self.wfile.write(chunk)
                 finally:
+                    if spool is not None:
+                        spool.close()
                     iterator.close()
                 return
             raise Problem('Not found', 404)
+
+        def proxy_realtime(self, project):
+            """Local development proxy to the Node Realtime seal function."""
+            target = os.environ['REALTIME_SEAL_URL'].rstrip('/') + '/api/live?project=' + quote(project)
+            request = Request(target, headers={'Authorization': self.headers.get('Authorization', '')})
+            try:
+                with urlopen(request, timeout=20) as response:
+                    return self.result(json.loads(response.read().decode('utf-8') or '{}'), response.status)
+            except HTTPError as error:
+                try:
+                    body = json.loads(error.read().decode('utf-8') or '{}')
+                except (ValueError, UnicodeDecodeError):
+                    body = {}
+                return self.result({'error': body.get('error', 'Live results are unavailable')}, error.code)
+            except (URLError, OSError, ValueError):
+                return self.result({'error': 'Live results are unavailable'}, 503)
 
         def serve_web(self, request_path):
             require(web_root is not None and self.command == 'GET', 'Not found', 404)
@@ -276,7 +325,7 @@ def handler_for(service, web_root=None):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--db', default='data/agal.sqlite')
+    parser.add_argument('--db', default=os.environ.get('DATABASE_URL', 'data/agal.sqlite'))
     parser.add_argument('--host', default='127.0.0.1')
     parser.add_argument('--port', type=int, default=8000)
     parser.add_argument('--bootstrap-email')

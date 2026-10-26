@@ -1,13 +1,30 @@
 {
-  "buildCommand": "npm --prefix web ci && npm --prefix web run build",
+  "buildCommand": "npm --prefix web ci && npm --prefix web run build:vercel",
   "outputDirectory": "web/dist",
   "framework": null,
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60,
+      "includeFiles": "backend/**",
+      "excludeFiles": "{web/**,desktop/**,mobile/**,data/**,dist/**,build/**,docs/**,.github/**,backend/tests/**,backend/postgres_tests/**,backend/*test_server.py}"
+    }
+  },
   "rewrites": [
+    {"source": "/api/projects/:project/live", "destination": "/api/live?project=:project"},
+    {"source": "/api/:path*", "destination": "/api/index.py?__path=:path*"},
+    {"source": "/app", "destination": "/app/index.html"},
+    {"source": "/app/", "destination": "/app/index.html"},
+    {"source": "/survey/:token", "destination": "/app/index.html"},
+    {"source": "/survey/:token/", "destination": "/app/index.html"},
     {"source": "/documentation", "destination": "/index.html"},
     {"source": "/tutorials", "destination": "/index.html"},
     {"source": "/downloads", "destination": "/index.html"}
   ],
   "headers": [
+    {
+      "source": "/api/:path*",
+      "headers": [{"key": "Cache-Control", "value": "no-store"}]
+    },
     {
       "source": "/releases/:file*",
       "headers": [{"key": "Cache-Control", "value": "public, max-age=0, must-revalidate"}]

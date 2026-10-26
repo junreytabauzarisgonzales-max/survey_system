@@ -15,7 +15,31 @@ npm ci
 npm run dev
 ```
 
-Use `npm run build` to produce `web/dist/` for deployment. The root `vercel.json` configures Vercel. The Windows EXE is staged automatically when built; the Android APK must be built/supplied before its download becomes available. See **[website deployment and download packaging](docs/WEBSITE.md)** for bundling files, external download URLs and CI artifacts.
+Use `npm run build` to produce a static-only `web/dist/`. The root Vercel configuration uses `npm run build:vercel` to include both the documentation site and the online workspace described below. The Windows EXE is staged automatically when built; the Android APK must be built/supplied before its download becomes available. See **[website deployment and download packaging](docs/WEBSITE.md)** for bundling files, external download URLs and CI artifacts.
+
+## Hosted backend — Vercel + Neon PostgreSQL
+
+The backend supports a hosted PostgreSQL database and a Vercel Python Function, with Neon Auth, Neon Object Storage and Neon Realtime wired into the hosted app. Set the variables from `.env.example` in Vercel's server-side environment variables, then deploy from the repository root. `DATABASE_URL_UNPOOLED` is used for migrations; the pooled `DATABASE_URL` serves application queries.
+
+- `/` remains the documentation/download website.
+- `/app/` opens the hosted survey workspace.
+- `/survey/<token>` opens a public respondent questionnaire.
+- `/api/*` uses Neon; `/api/health` checks database, Auth, storage and Realtime readiness.
+- `/api/projects/<id>/live` returns a sealed Realtime capability after a server-side access check.
+
+PostgreSQL migrations run on first API use, serialized across instances. Account/survey data persists in Neon; hosted attachment bytes are stored in the private `assets` bucket and deleted with their project. The Windows/Android device-local apps continue to use their own SQLite storage. No Neon credentials are required to build the frontend; only the Realtime WebSocket URL is embedded in the hosted bundle.
+
+To run the combined portal and app locally against Neon:
+
+```powershell
+npm install
+npm --prefix web ci
+npm start
+```
+
+`npm start` runs the combined `build:vercel` build first, then starts the Python hosted server at `http://127.0.0.1:8765` and the local Realtime sealing sidecar. It reads `.env.local`, applies pending Neon migrations and serves `web/dist`. The Auth trusted origin and Realtime allowed origins must include `http://localhost:8765`.
+
+See **[complete Vercel + Neon setup](docs/VERCEL_NEON.md)** for environment variables, payload limits, migrations, testing and backup behavior. Root `requirements.txt` installs the PostgreSQL driver; SQLite-only source operation still uses the Python standard library.
 
 ## Install on PC or mobile — device-local storage
 
@@ -41,7 +65,7 @@ The optional starter templates are editable examples. Their domain-specific role
 
 ## Run the survey interface / optional hosted backend
 
-Requirements: Python 3.12+, Node.js 22.12+ and npm. The backend uses the Python standard library; no Python packages are required.
+Requirements: Python 3.12+, Node.js 22.12+ and npm. SQLite-only operation uses the Python standard library. PostgreSQL operation additionally requires `python -m pip install -r requirements.txt` and a `DATABASE_URL` environment variable.
 
 From the repository root:
 

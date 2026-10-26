@@ -19,9 +19,12 @@ from backend.service import Service
 
 
 class PlatformTest(unittest.TestCase):
+    def database_target(self):
+        return str(Path(self.temp.name) / 'db.sqlite')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.path = str(Path(self.temp.name) / 'db.sqlite')
+        self.path = self.database_target()
         migrate(self.path)
         bootstrap(self.path, 'admin@example.test', 'long-test-password')
         self.s = Service(self.path)
@@ -83,10 +86,11 @@ class PlatformTest(unittest.TestCase):
         form = self.s.save_form(self.admin, self.project['id'], {**self.form, 'draft': self.schema}, self.form['id'])
         self.s.publish(self.admin, form['id'], form['revision'])
         self.assertEqual(self.parse(self.export(format='long'))[0]['question_label'], 'Filipino text')
-        with connect(self.path) as c:
-            with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(sqlite3.IntegrityError):
+            with connect(self.path) as c:
                 c.execute('UPDATE versions SET schema=? WHERE id=?', ('{}', self.version['id']))
-            with self.assertRaises(sqlite3.IntegrityError):
+        with self.assertRaises(sqlite3.IntegrityError):
+            with connect(self.path) as c:
                 c.execute('DELETE FROM versions WHERE id=?', (self.version['id'],))
 
     def test_raw_preserves_original_types_and_states(self):

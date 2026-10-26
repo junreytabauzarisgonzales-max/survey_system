@@ -1,0 +1,23 @@
+{
+  "name": "survey-system",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "build": "npm --prefix web run build",
+    "build:app": "npm --prefix web run build:app",
+    "build:vercel": "npm --prefix web run build:vercel",
+    "prestart": "npm run build:vercel",
+    "start": "node scripts/start-hosted.mjs",
+    "start:realtime": "node scripts/realtime-server.mjs"
+  },
+  "dependencies": {
+    "@neon/config": "^1.9.4",
+    "@neon/env": "^1.6.5",
+    "@neon/realtime": "^0.1.2",
+    "dotenv": "^18.0.9",
+    "pg": "^8.23.1"
+  }
+}

@@ -4,10 +4,17 @@ This document deliberately separates implemented source from executed verificati
 
 ## Executed in this workspace
 
-- Python API/model/database/CSV tests: `python -m unittest discover -s backend/tests -v` — **43 passed**.
+- Python SQLite API/model/database/CSV and hosted-configuration tests: `python -m unittest discover -s backend/tests -v` — **44 passed**.
+- PostgreSQL parity/hosted integration checks against an isolated local PostgreSQL 16 cluster — **47 passed** (46-test suite plus the added typed-filter scenario).
+- Neon provisioning: project `survey_system` (PostgreSQL 18, `aws-ap-southeast-1`), Auth, private `assets` storage and Realtime enabled; `neon deploy -y` pulled all 11 service variables.
+- Neon migrations `001_initial.sql` and `002_attachment_storage.sql` applied successfully.
+- Live Neon end-to-end check: Neon Auth sign-up/sign-in **passed**; app HTTP login **passed**; public survey submission with a media attachment **passed**; PostgreSQL interview/CSV count **1**; attachment download byte comparison **passed**; Realtime subscription reached **live** with `response_count=1`; project deletion removed the interview row and the S3 object.
+- Neon service failure paths: unknown project live capability **403**; missing session **401**.
 - React form and question-parser tests: `npm test` in `web/` — **7 passed**.
 - Production public-site compilation: `npm run build` in `web/` — **passed**.
 - Independent survey-interface compilation: `npm run build:app` in `web/` — **passed**.
+- Combined Vercel portal + hosted-interface compilation: `npm run build:vercel` — **passed**.
+- PostgreSQL-backed hosted browser workflow: `npm run test:hosted` — **1 passed**.
 - Public documentation/tutorial/download Chrome tests: `npm run test:site` — **3 passed**, using only a static preview with no backend.
 - Chrome browser workflows: `npm run test:e2e` in `web/` against a separate temporary database — **3 passed**.
 - Desktop SQLite/restart/backup/origin-isolation integration check: `python -m unittest discover -s desktop/tests -v` — **1 passed**.
@@ -21,6 +28,12 @@ This document deliberately separates implemented source from executed verificati
 The Windows desktop host bundles the existing interface and local Python/SQLite engine, binds only to a random loopback port, and stores the database outside the installation directory. Native CSV/summary/manifest save dialogs and verified database backups are supplied. The integration check verifies account/survey writes, backup integrity, preservation after reopening and rejection of unrelated Host/Origin headers. The native smoke check verifies that the desktop interface renders and the only exposed native methods are the file save, backup and storage-info methods.
 
 Android now supplies an independent no-account local workspace, questionnaire creation, offline response collection/corrections, local CSV export, and self-contained local recovery archives. `mobile/test/local_workspace_test.dart` adds SQLite reopen/correction/export and empty-device recovery scenarios. These Flutter tests and APK compilation remain **unexecuted**: a temporary SDK bootstrap did not complete. Dart was recovered and parsed the sources successfully, but Flutter initialization timed out and dependency resolution was blocked by missing engine packages (`sky_engine`). A working Flutter SDK and Android SDK/device verification are still required. See [device installation](DEVICE_INSTALLATION.md) for build and storage details.
+
+### Hosted PostgreSQL / Vercel implementation
+
+The hosted API uses a Vercel-compatible `BaseHTTPRequestHandler` entry point and reads `DATABASE_URL` at runtime. PostgreSQL parity checks cover existing surveys/accounts/permissions, JSON answer filters including typed numeric/boolean/string comparisons, sequential correction ordering, immutable originals, public receipts/attachments, CSV/analytics, confirmed deletion and retention. Extra checks verify simultaneous public retries produce one receipt, competing draft revisions have one winner, migrations are repeatable, limiter budgets are shared by separate handlers, rewritten query paths preserve filters, and oversized hosted exports return HTTP 413 before CSV headers.
+
+The browser workflow opens the documentation site, follows `/app/`, signs in, answers `/survey/<token>` without a respondent account and verifies the stored PostgreSQL response. API and hosted assets run together on an isolated test server. The combined build was also run locally against the user's live Neon project with Neon Auth, Object Storage and Realtime enabled. Actual Vercel gateway routing, function cold starts and a live Vercel deployment remain pending: the production domain must be added as a Neon Auth trusted origin and a Realtime allowed origin. See [Neon/Vercel setup](VERCEL_NEON.md).
 
 ### Public documentation website
 

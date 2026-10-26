@@ -34,6 +34,9 @@ class Connection(sqlite3.Connection):
 
 
 def connect(path):
+    if is_postgres(path):
+        from .postgres import Connection as PostgresConnection
+        return PostgresConnection(str(path))
     conn = sqlite3.connect(path, timeout=30, factory=Connection)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys=ON')
@@ -42,6 +45,9 @@ def connect(path):
 
 
 def migrate(path):
+    if is_postgres(path):
+        from .postgres import migrate as migrate_postgres
+        return migrate_postgres(str(path))
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as conn:
         conn.execute('PRAGMA journal_mode=WAL')
@@ -81,9 +87,15 @@ def bootstrap(path, email, password):
 
 def backup(path, destination):
     """SQLite backup API includes committed WAL content; never copy a live db file."""
+    if is_postgres(path):
+        raise ValueError('Use pg_dump or Neon backups for a PostgreSQL database.')
     target = Path(destination)
     target.parent.mkdir(parents=True, exist_ok=True)
     with connect(path) as source, connect(target) as dest:
         source.backup(dest)
         if dest.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
             raise RuntimeError('Backup integrity check failed')
+
+
+def is_postgres(path):
+    return str(path).startswith(('postgresql://', 'postgres://'))

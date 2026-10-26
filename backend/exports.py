@@ -10,7 +10,7 @@ import secrets
 import statistics
 from datetime import datetime, timezone
 
-from .db import connect, encode, new_id, now
+from .db import connect, encode, is_postgres, new_id, now
 from .model import questions, require, uid, validate_value, STATES
 
 
@@ -131,6 +131,28 @@ class Export:
                 op, value = rule.get('op'), rule.get('value')
                 require(op in ('equals', 'contains', 'gt', 'lt', 'state'), 'Unsupported answer filter')
                 path = '$."' + qid + '".'
+                if is_postgres(service.path):
+                    state = f'({source})::jsonb #>> ?::text[]'
+                    if op == 'state':
+                        require(value in STATES, 'Unknown answer state')
+                        self.where.append(f"COALESCE({state}, 'missing')=?")
+                        self.args.extend([[qid, 'state'], value])
+                        continue
+                    require(type(value) in (str, int, float, bool), 'Filter value must be scalar')
+                    if op in ('gt', 'lt'):
+                        require(allowed[qid]['type'] in ('number', 'currency', 'rating'), 'Numeric comparison requires a numeric question')
+                        require(type(value) in (int, float) and math.isfinite(value), 'Numeric filter requires a finite number')
+                    self.where.append(f'({state})=?')
+                    self.args.extend([[qid, 'state'], 'answered'])
+                    extracted = f'({source})::jsonb #> ?::text[]'
+                    if op == 'contains':
+                        require(allowed[qid]['type'] == 'multiple', 'Contains requires a multiple-choice question')
+                        self.where.append(f"EXISTS(SELECT 1 FROM jsonb_array_elements(COALESCE({extracted}, '[]'::jsonb)) AS choices(value) WHERE value=?::jsonb)")
+                    else:
+                        operator = {'equals': '=', 'gt': '>', 'lt': '<'}[op]
+                        self.where.append(f'({extracted}){operator}?::jsonb')
+                    self.args.extend([[qid, 'value'], encode(value)])
+                    continue
                 if op == 'state':
                     require(value in STATES, 'Unknown answer state')
                     self.where.append(f"COALESCE(json_extract({source},?), 'missing')=?")
@@ -192,7 +214,8 @@ class Export:
             definitions = {}
             for v, q in self.definitions:
                 definitions.setdefault(v['id'], []).append(q)
-            rows = c.execute('SELECT i.*' + self.sql + ' ORDER BY i.id', self.args)
+            query = 'SELECT i.*' + self.sql + ' ORDER BY i.id'
+            rows = c.iterate(query, self.args) if is_postgres(self.service.path) else c.execute(query, self.args)
             for row in rows:
                 latest = c.execute('SELECT * FROM corrections WHERE interview_id=? ORDER BY rowid DESC LIMIT 1', (row['id'],)).fetchone()
                 answers = json.loads(latest['answers'] if latest and not self.options.get('original') else row['answers'])

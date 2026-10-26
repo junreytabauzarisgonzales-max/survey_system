@@ -2,7 +2,15 @@
 
 ## Authentication and authorization
 
-`POST /api/register` accepts `{name,email,password}` (minimum 8 characters) and returns the same session payload as login. Self-registration is open, rate-limited per client address and creates a non-administrator workspace owner. `POST /api/login` accepts `{email,password}` and returns `{token,expires_at,user}`. Supply `Authorization: Bearer <token>` on authenticated requests. Sessions expire after 12 hours. Passwords are PBKDF2-SHA256 hashes with individual random salts (600,000 iterations). Tokens are random and only their hashes are stored. Login attempts are rate-limited per client address in the running server process.
+`POST /api/register` accepts `{name,email,password}` (minimum 8 characters) and returns the same session payload as login. Self-registration is open, rate-limited per client address and creates a non-administrator workspace owner. `POST /api/login` accepts `{email,password}` and returns `{token,expires_at,user}`. Supply `Authorization: Bearer <token>` on authenticated requests. Sessions expire after 12 hours. Passwords are PBKDF2-SHA256 hashes with individual random salts (600,000 iterations). Tokens are random and only their hashes are stored. Local-server rate limits live in the running process; the Vercel entry point uses atomic PostgreSQL records shared across function instances.
+
+## Hosted PostgreSQL mode
+
+The same API is available through `api/index.py` on Vercel using a server-side `DATABASE_URL` (Neon pooled URL). PostgreSQL migrations use `DATABASE_URL_UNPOOLED` and are separate from the SQLite migrations used by local desktop/server mode. The hosted workspace is `/app/` and public links remain `/survey/{token}`. Hosted `/api/health` checks the connection and returns `{status,database,services,limits}`. Missing database configuration returns HTTP 503 rather than creating a temporary SQLite database. See [Neon/Vercel deployment](VERCEL_NEON.md).
+
+Hosted passwords are owned by Neon Auth. The app verifies credentials server-side and continues issuing its own 12-hour session tokens; local user rows mirror the Neon Auth identity for project permissions. Hosted attachments are stored in the private Neon Object Storage `assets` bucket and referenced by `attachments.storage_key`; local SQLite keeps bytes in the database. `GET /api/projects/{id}/live` validates the session and project membership, then returns a sealed Neon Realtime capability for that project's response count.
+
+Hosted requests and responses/exports are capped at 4 MiB and attachments at 2 MiB (total per public response). Oversized exports return HTTP 413 before sending a CSV. Hosted attachment bytes are stored in Neon Object Storage; local mode retains SQLite `BYTEA` values and the existing 10 MiB media limit. Hosted write transactions preserve serialized revision/idempotency checks, read exports use repeatable-read snapshots, and correction order uses a generated sequence.
 
 Web tokens are stored in session storage. Android tokens are stored through `flutter_secure_storage`. `POST /api/logout` revokes the current token. Project authorization is rechecked per request, export, correction and synchronization event.
 
@@ -22,7 +30,8 @@ All bodies are JSON objects. API errors are `{error: "message"}` with an appropr
 
 | Method | Path | Function |
 |---|---|---|
-| GET | `/api/health` | Health check |
+| GET | `/api/health` | Health check, including configured Neon services |
+| GET | `/api/projects/{id}/live` | Authenticated, membership-checked sealed Realtime capability |
 | POST | `/api/register`, `/api/login`, `/api/logout` | Register, sign in/out |
 | GET | `/api/me` | Current user |
 | GET, POST | `/api/users` | List/create accounts (administrator only) |
@@ -69,7 +78,7 @@ Create with `{name,version_id,expires_at?}`. Only a manager of that version's pr
 
 Update with `{name,enabled,expires_at,revision}`. `expires_at` is a timezone-aware ISO 8601 timestamp or `null`; new links must expire in the future. Version, project, creator and token cannot be changed. Create a new link to share a new version. Both changes and creation have project-scoped history.
 
-Anonymous `GET` returns only `{title,project_name,version_number,schema,locations}`. The version's original form name, consent, question definitions/labels and the link's location snapshot are used. Disabled/expired/archived links or links whose creator no longer has the required active grants return 410. Unknown tokens return 404. No anonymous route lists or reads submissions, private project configuration or protected file downloads.
+Anonymous `GET` returns only `{title,project_name,version_number,schema,locations,attachment_limit}`. `attachment_limit` is the maximum total decoded media bytes allowed for this host. The version's original form name, consent, question definitions/labels and the link's location snapshot are used. Disabled/expired/archived links or links whose creator no longer has the required active grants return 410. Unknown tokens return 404. No anonymous route lists or reads submissions, private project configuration or protected file downloads.
 
 Submission body:
 
@@ -88,9 +97,9 @@ The same declarative, typed validation and required/conditional/missing-state ru
 
 The response is only `{submitted:true,receipt:<UUID>}`. The client keeps its submission UUID and exact payload during uncertain failures. The submission UUID and canonical fingerprint prevent a retry from creating a second interview; reusing a key for different answers/link is a 409 conflict. Existing identical receipts can be acknowledged after link closure or retention without reopening collection or recreating deleted interviews. Intentional separate responses use new UUIDs; there is no identity-based one-person limit.
 
-Media answers reference UUIDs supplied in the same submission's `attachments:[{id,question_id,filename,mime,content}]`, where content is base64. Every media reference must have a matching file for the same question, IDs cannot reference another interview's attachment, and total decoded attachment content is limited to 10 MiB. Files and completed answers are committed together. Public links cannot read uploaded files afterward.
+Media answers reference UUIDs supplied in the same submission's `attachments:[{id,question_id,filename,mime,content}]`, where content is base64. Every media reference must have a matching file for the same question, IDs cannot reference another interview's attachment, and total decoded attachment content is bounded by the reported `attachment_limit` (10 MiB locally, 2 MiB on Vercel). Files and completed answers are committed together. Public links cannot read uploaded files afterward.
 
-Public API requests omit authenticated bearer credentials. The server currently permits up to 60 public POST requests and 180 other public requests per observed client IP per minute. Behind a reverse proxy the observed address may be shared; forwarded IP headers are not implicitly trusted. Public pages require network access for submission and do not persist answers in browser storage.
+Public API requests omit authenticated bearer credentials. The server currently permits up to 60 public POST requests and 180 other public requests per observed client IP per minute. Local/server mode does not implicitly trust forwarded IP headers. The Vercel-specific handler trusts platform-supplied forwarding headers and shares request budgets through PostgreSQL using 60-second windows. Public pages require network access for submission and do not persist answers in browser storage.
 
 ## Project configuration
 

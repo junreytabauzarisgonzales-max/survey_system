@@ -19,9 +19,12 @@ from backend.service import Service
 
 
 class PublicSurveyTest(unittest.TestCase):
+    def database_target(self):
+        return str(Path(self.temp.name) / 'db.sqlite')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='agal-public-')
-        self.path = str(Path(self.temp.name) / 'db.sqlite')
+        self.path = self.database_target()
         migrate(self.path)
         bootstrap(self.path, 'admin@example.test', 'public-test-password')
         with connect(self.path) as c:
@@ -63,7 +66,8 @@ class PublicSurveyTest(unittest.TestCase):
 
     def test_public_schema_is_minimal_and_does_not_require_a_user(self):
         survey = self.s.public_survey(self.link['token'])
-        self.assertEqual(set(survey), {'title', 'project_name', 'version_number', 'schema', 'locations'})
+        self.assertEqual(set(survey), {'title', 'project_name', 'version_number', 'schema', 'locations', 'attachment_limit'})
+        self.assertEqual(survey['attachment_limit'], 10 * 1024 * 1024)
         self.assertEqual(survey['title'], 'Public questionnaire')
         self.assertNotIn('Private internal objectives', encode(survey))
         self.assertNotIn(self.admin['email'], encode(survey))
