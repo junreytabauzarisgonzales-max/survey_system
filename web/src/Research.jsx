@@ -1,5 +1,6 @@
 import React,{useEffect,useMemo,useState} from 'react';
 import {api,download,downloadManifest} from './api';
+import {saveBlob} from './device';
 import {allQuestions,conditionValue,defaults,isVisible,normalize,uuid,validate} from './core';
 import {DynamicForm} from './Renderer';
 import {Modal} from './Management';
@@ -87,7 +88,7 @@ export function Analytics({project,forms,versions,act}){
   useEffect(()=>{setRows(null);setOverview(null);setOptions({status:'completed'});setGroup(false);act(()=>load({status:'completed'}));},[project.id]);
   const set=(key,value)=>setOptions(current=>({...current,[key]:value}));
   const labelsFor=row=>{const q=versions.find(v=>v.id===row.version_id)?.schema?.sections?.flatMap(s=>s.questions).find(question=>question.id===row.question_id);return q?.type==='boolean'?{true:'Yes',false:'No'}:Object.fromEntries((q?.choices||[]).map(choice=>[choice.code,choice.label]));};
-  const summary=()=>{if(!rows)return;const cell=value=>{const text=String(value??'');return /^\s*[=+\-@]/.test(text)?`'${text}`:`"${text.replaceAll('"','""')}"`;};const header=['question','type','version','group','answered','total','average','median','mode','minimum','maximum','standard_deviation','answers'];const lines=[header,...rows.map(row=>[row.label,row.type,versions.find(v=>v.id===row.version_id)?.number??'',row.group,row.answered,row.total,row.mean,row.median,row.mode,row.min,row.max,row.stdev,JSON.stringify(row.categories)])];const blob=new Blob(['\ufeff'+lines.map(line=>line.map(cell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download='survey-results-summary.csv';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+  const summary=async()=>{if(!rows)return;const cell=value=>{const text=String(value??'');return /^\s*[=+\-@]/.test(text)?`'${text}`:`"${text.replaceAll('"','""')}"`;};const header=['question','type','version','group','answered','total','average','median','mode','minimum','maximum','standard_deviation','answers'];const lines=[header,...rows.map(row=>[row.label,row.type,versions.find(v=>v.id===row.version_id)?.number??'',row.group,row.answered,row.total,row.mean,row.median,row.mode,row.min,row.max,row.stdev,JSON.stringify(row.categories)])];const blob=new Blob(['\ufeff'+lines.map(line=>line.map(cell).join(',')).join('\r\n')],{type:'text/csv;charset=utf-8'});await saveBlob(blob,'survey-results-summary.csv');};
   return <>
     <div className="card"><div className="toolbar"><div className="grow"><h2>Results</h2><p>Choose what to include, then explore charts, averages, and written-answer counts.</p></div></div>
       <div className="grid results-filters">
@@ -99,7 +100,7 @@ export function Analytics({project,forms,versions,act}){
         <label>Collected through<select value={options.source||''} onChange={event=>set('source',event.target.value)}><option value="">All sources</option><option value="researcher">Manual entry</option><option value="public_link">Shared link</option></select></label>
       </div>
       <label className="check"><input type="checkbox" checked={group} onChange={event=>setGroup(event.target.checked)}/>Compare results by location</label>
-      <div className="toolbar"><button className="primary" onClick={()=>act(()=>load({...options,group_by_location:group}))}>Show results</button><span className="grow"/>{rows&&<><button onClick={summary}>↓ Summary CSV</button><button onClick={()=>window.print()}>Print / save PDF</button></>}</div>
+      <div className="toolbar"><button className="primary" onClick={()=>act(()=>load({...options,group_by_location:group}))}>Show results</button><span className="grow"/>{rows&&<><button onClick={()=>act(summary)}>↓ Summary CSV</button><button onClick={()=>window.print()}>Print / save PDF</button></>}</div>
     </div>
     {overview&&<><div className="stats results-stats">{[['Total responses',overview.total],['Completed',overview.completed],['Drafts',overview.draft],['Days collecting',overview.timeline.length]].map(([label,value])=><article className="card" key={label}><small>{label}</small><strong>{value}</strong></article>)}</div><div className="card"><div className="toolbar"><h2 className="grow">Responses over time</h2><span className="badge">{overview.total} total</span></div><Timeline data={overview.timeline}/></div></>}
     {rows&&rows.length===0&&<div className="empty">No responses match these choices yet. Try choosing “All responses” or removing a filter.</div>}

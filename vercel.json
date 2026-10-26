@@ -1,0 +1,32 @@
+{
+  "buildCommand": "npm --prefix web ci && npm --prefix web run build",
+  "outputDirectory": "web/dist",
+  "framework": null,
+  "rewrites": [
+    {"source": "/documentation", "destination": "/index.html"},
+    {"source": "/tutorials", "destination": "/index.html"},
+    {"source": "/downloads", "destination": "/index.html"}
+  ],
+  "headers": [
+    {
+      "source": "/releases/:file*",
+      "headers": [{"key": "Cache-Control", "value": "public, max-age=0, must-revalidate"}]
+    },
+    {
+      "source": "/releases/:file.exe",
+      "headers": [
+        {"key": "Content-Type", "value": "application/octet-stream"},
+        {"key": "Content-Disposition", "value": "attachment"},
+        {"key": "X-Content-Type-Options", "value": "nosniff"}
+      ]
+    },
+    {
+      "source": "/releases/:file.apk",
+      "headers": [
+        {"key": "Content-Type", "value": "application/vnd.android.package-archive"},
+        {"key": "Content-Disposition", "value": "attachment"},
+        {"key": "X-Content-Type-Options", "value": "nosniff"}
+      ]
+    }
+  ]
+}

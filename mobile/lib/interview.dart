@@ -125,8 +125,8 @@ class _InterviewState extends State<InterviewPage> {
             for(final q in s['questions'])field(Map<String,dynamic>.from(q))],
           if(completed)...[
             const Divider(),const Text('Original submission is immutable. Changes are tracked as corrections.'),
-            ExpansionTile(title:Text('Correction history (${history.length})'),children:history.map((h)=>ExpansionTile(title:Text(h['reason']),subtitle:Text('${h['created_at']} · ${h['superseded']==true?'superseded proposal':h['synced']==true?'synced':'pending sync'}'),children:[for(final q in questions(schema))if(privateAccess||!(q['sensitive']==true||['media','location'].contains(q['type'])))ListTile(title:Text(q['label']),subtitle:Text(jsonEncode(h['answers'][q['id']])))] )).toList()),
-            TextButton(onPressed:saving?null:()=>action(reconcile),child:const Text('Review & reconcile server corrections')),
+            ExpansionTile(title:Text('Correction history (${history.length})'),children:history.map((h)=>ExpansionTile(title:Text(h['reason']),subtitle:Text('${h['created_at']} · ${widget.client.isLocal?'saved on device':h['superseded']==true?'superseded proposal':h['synced']==true?'synced':'pending sync'}'),children:[for(final q in questions(schema))if(privateAccess||!(q['sensitive']==true||['media','location'].contains(q['type'])))ListTile(title:Text(q['label']),subtitle:Text(jsonEncode(h['answers'][q['id']])))] )).toList()),
+            if(!widget.client.isLocal)TextButton(onPressed:saving?null:()=>action(reconcile),child:const Text('Review & reconcile server corrections')),
             TextField(decoration:const InputDecoration(labelText:'Reason for correction'),onChanged:(v)=>reason=v)],
           const SizedBox(height:24),
           FilledButton(onPressed:saving||!canEdit?null:()=>action(finish),child:Text(completed?'Save tracked correction':'Complete response')),

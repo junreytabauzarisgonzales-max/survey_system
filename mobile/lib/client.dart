@@ -10,6 +10,12 @@ class Client {
   String base,token;
   Json user;
   Client(this.base,this.token,this.user);
+  bool get isLocal=>user['id']==Store.localOwner;
+  static Future<Client> local() async {
+    final client=Client('Device storage','',{'id':Store.localOwner,'name':'Local workspace','email':'On this device only'});
+    await secure.write(key:'session',value:jsonEncode({'base':client.base,'token':'','user':client.user}));
+    return client;
+  }
   static Future<Client?> cached() async {
     final value=await secure.read(key:'session');
     if(value==null)return null;
@@ -27,6 +33,7 @@ class Client {
     return client;
   }
   Future<dynamic> call(String path,[Json? body]) async {
+    if(isLocal)throw StateError('This workspace stores data only on this device.');
     final headers={'Content-Type':'application/json','Authorization':'Bearer $token'};
     final uri=Uri.parse('$base/api$path');
     final response=await (body==null?http.get(uri,headers:headers):http.post(uri,headers:headers,body:jsonEncode(body))).timeout(const Duration(seconds:40));
@@ -35,6 +42,7 @@ class Client {
     return value;
   }
   Future<void> refresh(Store store) async {
+    if(isLocal)return;
     final projects=(await call('/projects') as List).map((p)=>Map<String,dynamic>.from(p)).toList();
     final versions=<Json>[];
     for(final p in projects) {

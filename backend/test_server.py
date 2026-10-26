@@ -11,4 +11,4 @@ if __name__ == '__main__':
         db = str(Path(directory) / 'test.sqlite')
         migrate(db)
         bootstrap(db, 'browser@example.test', 'browser-test-password')
-        ThreadingHTTPServer(('127.0.0.1', 8765), handler_for(Service(db), Path(__file__).parent.parent / 'web' / 'dist')).serve_forever()
+        ThreadingHTTPServer(('127.0.0.1', 8765), handler_for(Service(db), Path(__file__).parent.parent / 'web' / 'app-dist')).serve_forever()

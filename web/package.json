@@ -4,10 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 127.0.0.1",
-    "build": "vite build",
+    "dev": "node scripts/prepare-downloads.mjs && vite --host 127.0.0.1",
+    "dev:app": "vite --mode app --host 127.0.0.1",
+    "build": "node scripts/prepare-downloads.mjs && vite build",
+    "build:app": "vite build --mode app",
+    "prepare:downloads": "node scripts/prepare-downloads.mjs",
+    "preview": "vite preview --host 127.0.0.1",
     "test": "node --test src/core.test.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:site": "playwright test --config playwright.site.config.js"
   },
   "dependencies": {
     "react": "19.2.0",

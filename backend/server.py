@@ -293,7 +293,7 @@ def main():
         print('Administrator created')
         return
     logging.basicConfig(level=logging.INFO)
-    server = ThreadingHTTPServer((args.host, args.port), handler_for(Service(args.db), Path(__file__).parent.parent / 'web' / 'dist'))
+    server = ThreadingHTTPServer((args.host, args.port), handler_for(Service(args.db), Path(__file__).parent.parent / 'web' / 'app-dist'))
     print(f'Student Survey Creator listening on http://{args.host}:{args.port}')
     server.serve_forever()
 

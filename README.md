@@ -1,8 +1,29 @@
 # Student Survey & Questionnaire Creator
 
-A simple survey platform for students: create an account, build or paste questions, share a public link, collect answers, and see charts and averages. It includes a React web app, a standard-library Python/SQLite API, and a Flutter Android client for offline collection.
+A survey system for students with a standalone Windows desktop application, an Android local workspace, and a public documentation/tutorial/download website. Installed apps store surveys and responses directly on the device. The Windows app includes the React interface and Python/SQLite engine; Android uses Flutter and local SQLite. A hosted survey-server mode is also available.
 
 Anyone can register and immediately create surveys. Each account owns its own workspace; surveys are private unless the owner invites teammates by email.
+
+## Public website — documentation, tutorials and downloads
+
+The default website is an information site with **Overview**, **Documentation**, **Tutorials** and **Downloads** pages. It can be hosted on Vercel without a backend. It includes Windows/Android walkthroughs, local-storage guidance, and real-package download availability.
+
+From `web/`:
+
+```powershell
+npm ci
+npm run dev
+```
+
+Use `npm run build` to produce `web/dist/` for deployment. The root `vercel.json` configures Vercel. The Windows EXE is staged automatically when built; the Android APK must be built/supplied before its download becomes available. See **[website deployment and download packaging](docs/WEBSITE.md)** for bundling files, external download URLs and CI artifacts.
+
+## Install on PC or mobile — device-local storage
+
+- **Windows:** build/run `desktop/` to open the system in its own desktop window. Its database is `%LOCALAPPDATA%\StudentSurveyCreator\surveys.sqlite`. No hosted server or internet is required. Accounts are local to this PC. CSV and recovery backups save through native file dialogs.
+- **Android:** choose **Use device storage — no account needed**. Create surveys, collect/autosave responses, export CSV and save/restore recovery backups without an initial download or connection. Records live in app-private device storage. Export a recovery backup before uninstalling or clearing app data.
+- **Installation packages:** the Windows build script produces a standalone application and, with Inno Setup, a setup installer. Flutter produces an installable Android APK. A manual GitHub Actions workflow builds both packages.
+
+See **[device installation, build commands and storage locations](docs/DEVICE_INSTALLATION.md)**. Each device has a separate database; there is no automatic upload or cross-device synchronization in local mode. Native targets supplied here are Windows and Android.
 
 ## What it does
 
@@ -14,11 +35,11 @@ Anyone can register and immediately create surveys. Each account owns its own wo
 - **Responses and corrections.** Review completed responses and drafts, add a response yourself, and keep an auditable correction history instead of overwriting completed answers.
 - **Graphical results.** See total/completed/draft counts, a response timeline, category bars and donut charts, numeric averages/medians/modes/standard deviations, and histograms. Download a summary CSV or print the page.
 - **CSV export.** Wide, long, raw and analysis-ready files with filters, column previews, dictionaries, manifests and optional de-identification.
-- **Offline Android source.** Cached published forms, local SQLite autosaves, a durable sync outbox, attachment upload and local CSV export.
+- **Device-local applications.** Standalone Windows window/engine with persistent SQLite and native exports/backups; Android local questionnaire creation, SQLite autosaves, attachment storage, CSV export and recovery. Optional server-connected Android mode also supports cached published forms and a durable sync outbox.
 
 The optional starter templates are editable examples. Their domain-specific roles live only in template configuration, not in application logic or database tables.
 
-## Run the web app
+## Run the survey interface / optional hosted backend
 
 Requirements: Python 3.12+, Node.js 22.12+ and npm. The backend uses the Python standard library; no Python packages are required.
 
@@ -34,7 +55,7 @@ From `web/`:
 
 ```powershell
 npm ci
-npm run build
+npm run build:app
 ```
 
 Then, from the repository root:
@@ -43,9 +64,9 @@ Then, from the repository root:
 python -m backend.server --db data/agal.sqlite --host 127.0.0.1 --port 8000
 ```
 
-Open **http://127.0.0.1:8000**. The server serves both the built web app and `/api`. The default database filename keeps its original internal name for compatibility with existing installations.
+Open **http://127.0.0.1:8000**. The server serves the survey interface from `web/app-dist/` and `/api`. The public documentation website uses the independent `web/dist/` build. The default database filename keeps its original internal name for compatibility with existing installations.
 
-For web development, run the API on port 8000 and run `npm run dev` in `web/`. Vite proxies API requests to the backend.
+For survey-interface development, run the API on port 8000 and run `npm run dev:app` in `web/`. This mode proxies API requests to the backend.
 
 ### Deploy on Railway (free plan)
 
@@ -134,6 +155,8 @@ For the Android emulator, use the server URL `http://10.0.2.2:8000`. For a physi
 
 ### Offline fieldwork
 
+- For fully local operation, choose **Use device storage — no account needed**, create a local survey and start collecting. See the [local-device guide](docs/DEVICE_INSTALLATION.md).
+- For optional server-connected operation:
 - Sign in and download published surveys before leaving connectivity.
 - Open a survey to create a response. Draft changes are saved to local SQLite. Resume through **Responses**.
 - Record informed consent before completion. Coordinates require explicit consent and an Android runtime location grant.
@@ -150,17 +173,22 @@ From the root:
 
 ```powershell
 python -m unittest discover -s backend/tests -v
+python -m unittest discover -s desktop/tests -v
 ```
+
+With desktop dependencies installed, `.venv/Scripts/python.exe -m desktop.smoke` opens and automatically closes an isolated native Windows test window to verify rendering and the local-storage bridge.
 
 From `web/`:
 
 ```powershell
 npm test
 npm run build
+npm run test:site
+npm run build:app
 npm run test:e2e
 ```
 
-The browser tests use installed Google Chrome by default. Set `PLAYWRIGHT_CHANNEL=msedge` to use Edge. They start an isolated temporary API/database with test-only credentials and never touch `data/agal.sqlite`. Coverage includes self-registration, creating a survey from pasted questions, collecting a response, charts/averages, summary and long CSV export, immutable labels after a new version, public-link sharing on a 390px viewport, retry receipts and link disabling.
+The browser tests use installed Google Chrome by default. Set `PLAYWRIGHT_CHANNEL=msedge` to use Edge. Website tests use a static preview with no backend. The survey application tests start an isolated temporary API/database with test-only credentials and never touch `data/agal.sqlite`. Coverage includes self-registration, creating a survey from pasted questions, collecting a response, charts/averages, summary and long CSV export, immutable labels after a new version, public-link sharing on a 390px viewport, retry receipts and link disabling.
 
 Flutter tests are in `mobile/test/`. They include schema/CSV tests and an SQLite FFI offline completion/export/privacy test; none has been run here.
 
@@ -184,7 +212,8 @@ To permanently delete a survey, open **My Surveys**, expand **Survey options**, 
 
 ```text
 backend/   migrations, authorization, validation, sync, exports, analytics, HTTP API
-web/       React survey app, question importer, public respondent page, charts, acceptance tests
+desktop/   native Windows window, bundled local engine, file dialogs, installer build
+web/       public docs/tutorial/download site; separate local survey interface and tests
 mobile/    Flutter collection app, local SQLite store, Android document/share bridge
 docs/      API contract, CSV encoding, acceptance status
 ```

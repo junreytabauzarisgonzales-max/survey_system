@@ -6,8 +6,27 @@ This document deliberately separates implemented source from executed verificati
 
 - Python API/model/database/CSV tests: `python -m unittest discover -s backend/tests -v` — **43 passed**.
 - React form and question-parser tests: `npm test` in `web/` — **7 passed**.
-- Production web compilation: `npm run build` in `web/` — **passed**.
+- Production public-site compilation: `npm run build` in `web/` — **passed**.
+- Independent survey-interface compilation: `npm run build:app` in `web/` — **passed**.
+- Public documentation/tutorial/download Chrome tests: `npm run test:site` — **3 passed**, using only a static preview with no backend.
 - Chrome browser workflows: `npm run test:e2e` in `web/` against a separate temporary database — **3 passed**.
+- Desktop SQLite/restart/backup/origin-isolation integration check: `python -m unittest discover -s desktop/tests -v` — **1 passed**.
+- Native Windows Edge WebView2 window and device-storage bridge: `.venv/Scripts/python.exe -m desktop.smoke` — **passed**, using an isolated temporary database.
+- Single-file Windows executable packaging: `desktop/build.ps1` with PyInstaller — **passed**, output `dist/StudentSurveyCreator-Windows.exe`. Inno Setup is not installed locally, so the setup-installer recipe has not been compiled here.
+- Single-file packaged Windows executable launch and clean window shutdown — **passed**, using a temporary `LOCALAPPDATA` directory.
+- Dart syntax parsing of changed mobile files and the new local-workspace tests (`dart format --output=none`) — **passed**. This does not verify Flutter types or runtime behavior.
+
+### Device-local operation
+
+The Windows desktop host bundles the existing interface and local Python/SQLite engine, binds only to a random loopback port, and stores the database outside the installation directory. Native CSV/summary/manifest save dialogs and verified database backups are supplied. The integration check verifies account/survey writes, backup integrity, preservation after reopening and rejection of unrelated Host/Origin headers. The native smoke check verifies that the desktop interface renders and the only exposed native methods are the file save, backup and storage-info methods.
+
+Android now supplies an independent no-account local workspace, questionnaire creation, offline response collection/corrections, local CSV export, and self-contained local recovery archives. `mobile/test/local_workspace_test.dart` adds SQLite reopen/correction/export and empty-device recovery scenarios. These Flutter tests and APK compilation remain **unexecuted**: a temporary SDK bootstrap did not complete. Dart was recovered and parsed the sources successfully, but Flutter initialization timed out and dependency resolution was blocked by missing engine packages (`sky_engine`). A working Flutter SDK and Android SDK/device verification are still required. See [device installation](DEVICE_INSTALLATION.md) for build and storage details.
+
+### Public documentation website
+
+The default public website provides overview, documentation, platform-specific tutorials and download pages. Static-site browser checks cover navigation, tutorial platform/lesson deep links, absence of survey API requests, an actual Windows EXE download with its matching SHA-256 checksum, disabled missing-package controls, download-manifest error/retry and no horizontal overflow at a 390px viewport. Desktop and mobile screenshots were inspected. Vercel deployment configuration and a package-staging script are supplied; no live deployment was performed.
+
+The real single-file Windows EXE is included in the local static build under `web/dist/releases/`. The Android APK has not been built/supplied, so Android correctly appears as **Build pending**. The manual device-build workflow now produces both native downloads and a combined static website artifact once both builds pass. No CI run or release publication was performed here. See [website build/deployment](WEBSITE.md) for how to provide binaries on a fresh deployment.
 
 ### Public survey link verification
 
@@ -51,7 +70,7 @@ On an Android device/emulator:
 
 - No automatic semantic cross-version merge/coalescing; explicit version groups and version-qualified columns are implemented.
 - No arbitrary report designer, custom role-definition designer, bulk protected attachment ZIP export, server collection of local export audits, or automatic background synchronization service. Synchronization is explicit from Android Sync.
-- The web app requires connectivity. Offline collection/export is implemented in the native source, not as a browser PWA.
+- Hosted browser mode requires connectivity. The Windows desktop bundle runs its own local engine without internet; Android local operation is implemented in native source. No browser PWA is supplied.
 - The Android Gradle wrapper binary and local SDK metadata must be generated with `flutter create` as documented; no APK or release signing has been produced.
 - Instantaneous offline permission revocation and automatic anonymization of unclassified identifying free text are not guarantees the implementation makes.
 

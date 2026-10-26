@@ -4,6 +4,10 @@ __pycache__/
 data/
 node_modules/
 dist/
+app-dist/
+web/public/releases/*.exe
+web/public/releases/*.apk
+web/public/releases/downloads.json
 test-results/
 playwright-report/
 .dart_tool/

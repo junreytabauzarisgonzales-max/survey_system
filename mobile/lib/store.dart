@@ -9,6 +9,8 @@ const ids = Uuid();
 String utcNow()=>DateTime.now().toUtc().toIso8601String();
 
 class Store {
+  static const localOwner='device-local-v1';
+  bool get isLocal=>owner==localOwner;
   final Database db;
   final String owner;
   Store(this.db,this.owner);
@@ -31,6 +33,23 @@ class Store {
   Future<List<Json>> interviews()=>read('interviews');
   Future<Json> project(String id) async => (await read('projects',where:'id=?',args:[id])).single;
   Future<Json> version(String id) async => (await read('versions',where:'id=?',args:[id])).single;
+
+  Future<void> createLocalSurvey(String title,String consent,List<Json> items) async {
+    if(!isLocal)throw StateError('Open the device-local workspace to create local surveys.');
+    if(title.trim().isEmpty||items.isEmpty||items.length>2000)throw StateError('Enter a title and 1–2,000 questions.');
+    final supported={'text','number','currency','rating','single','multiple','boolean','date','time','media','location'};
+    for(final q in items) {
+      if((q['label'] as String).trim().isEmpty||!supported.contains(q['type']))throw StateError('Every question needs a label and a supported type.');
+      if(['single','multiple'].contains(q['type'])&&((q['choices'] as List).isEmpty||(q['choices'] as List).length>1000))throw StateError('Choice questions need 1–1,000 choices.');
+    }
+    final projectId=ids.v4(),versionId=ids.v4(),formId=ids.v4();
+    final project={'id':projectId,'name':title.trim(),'archived':false,'config':{'locations':[]},'access':{'role':'manager','identifiable':true}};
+    final version={'id':versionId,'project_id':projectId,'form_id':formId,'number':1,'created_at':utcNow(),'schema':{'engine_version':1,'form_name':title.trim(),'consent':consent.trim(),'sections':[{'id':ids.v4(),'label':'Questions','questions':items}]}};
+    await db.transaction((txn) async {
+      await txn.insert('projects',{'owner':owner,'id':projectId,'payload':jsonEncode(project)});
+      await txn.insert('versions',{'owner':owner,'id':versionId,'project_id':projectId,'payload':jsonEncode(version)});
+    });
+  }
 
   Future<void> cache(List<Json> projects,List<Json> versions) async {
     await db.transaction((txn) async {
@@ -61,7 +80,7 @@ class Store {
   Future<void> addCorrection(Json interview,Json answers,String reason) async {
     final history=await read('corrections',where:'interview_id=?',args:[interview['id']]);
     final unsent=history.where((h)=>h['synced']!=true&&h['superseded']!=true);
-    if(unsent.isNotEmpty) throw StateError('Synchronize the pending correction first.');
+    if(!isLocal&&unsent.isNotEmpty) throw StateError('Synchronize the pending correction first.');
     final correction={'id':ids.v4(),'interview_id':interview['id'],'answers':answers,'reason':reason,'created_at':utcNow(),'base_correction_id':history.isEmpty?null:history.last['server_id'],'synced':false};
     await db.insert('corrections',{'owner':owner,'id':correction['id'],'interview_id':interview['id'],'payload':jsonEncode(correction)});
   }
@@ -95,6 +114,7 @@ class Store {
     final identifiable=interviews.where((r)=>grants.firstWhere((p)=>p['id']==r['project_id'])['access']['identifiable']==true).map((r)=>r['id']).toSet();
     final mediaRows=(await db.query('media',where:'owner=?',whereArgs:[owner])).where((r)=>allowed.contains(r['interview_id'])&&identifiable.contains(r['interview_id'])).toList();
     final data=<String,dynamic>{'format':'agal-local-backup-v1','owner':owner,'created_at':utcNow(),'versions':versions.where((v)=>grants.any((p)=>p['id']==v['project_id'])).toList(),'interviews':interviews,'corrections':(await read('corrections')).where((c)=>allowed.contains(c['interview_id'])).toList(),'outbox':(await read('outbox')).where((e)=>allowed.contains(e['id'])).toList(),'media':[for(final row in mediaRows){...jsonDecode(row['payload'] as String),'interview_id':row['interview_id'],'synced':row['synced']}]};
+    if(isLocal)data['projects']=grants;
     data['media_files']=[for(final row in mediaRows) {'id':row['id'],'bytes':base64Encode(await File(row['path'] as String).readAsBytes())}];
     final file=File(p.join(directory,'agal-local-backup.json'));
     await file.writeAsString(jsonEncode(data),flush:true);
@@ -109,6 +129,22 @@ class Store {
     if(data['format']!='agal-local-backup-v1'||data['owner']!=owner)throw StateError('Backup belongs to a different account or format.');
     final grants={for(final pr in await projects())pr['id']:pr};
     final cached={for(final v in await versions())v['id']:v};
+    final restoredProjects=<Json>[],restoredVersions=<Json>[];
+    if(isLocal) {
+      for(final value in data['projects'] as List? ?? []) {
+        final pr=Map<String,dynamic>.from(value);
+        pr['access']={'role':'manager','identifiable':true};
+        grants.putIfAbsent(pr['id'],()=>pr);
+        restoredProjects.add(pr);
+      }
+      for(final value in data['versions'] as List? ?? []) {
+        final v=Map<String,dynamic>.from(value);
+        if(grants[v['project_id']]==null||(v['schema']['engine_version']??1)!=1)throw StateError('Invalid local survey version.');
+        if(cached.containsKey(v['id'])&&jsonEncode(cached[v['id']]!['schema'])!=jsonEncode(v['schema']))throw StateError('Existing survey version differs.');
+        cached.putIfAbsent(v['id'],()=>v);
+        restoredVersions.add(v);
+      }
+    }
     final records=(data['interviews'] as List).map((r)=>Map<String,dynamic>.from(r)).toList();
     for(final r in records) {
       if(grants[r['project_id']]==null||cached[r['version_id']]==null||cached[r['version_id']]['project_id']!=r['project_id'])throw StateError('Download authorized projects and original form versions before restoring.');
@@ -126,6 +162,12 @@ class Store {
       paths[id]=target.path;
     }
     await db.transaction((txn) async {
+      for(final pr in restoredProjects) {
+        await txn.insert('projects',{'owner':owner,'id':pr['id'],'payload':jsonEncode(pr)},conflictAlgorithm:ConflictAlgorithm.ignore);
+      }
+      for(final v in restoredVersions) {
+        await txn.insert('versions',{'owner':owner,'id':v['id'],'project_id':v['project_id'],'payload':jsonEncode(v)},conflictAlgorithm:ConflictAlgorithm.ignore);
+      }
       for(final r in records) {
         final old=await txn.query('interviews',where:'owner=? AND id=?',whereArgs:[owner,r['id']]);
         if(old.isNotEmpty) {
